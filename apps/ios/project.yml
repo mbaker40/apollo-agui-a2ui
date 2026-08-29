@@ -1,0 +1,39 @@
+# XcodeGen manifest — generate the Xcode project with:
+#   brew install xcodegen && xcodegen generate
+# (Run the Apollo codegen first so the ./GraphQL package exists; see README.)
+name: MweTasks
+options:
+  bundleIdPrefix: com.mwe
+  deploymentTarget:
+    iOS: "16.0"
+
+packages:
+  ChatCore:
+    path: ../../packages/chat-core-swift
+  MweGraphQL:
+    path: ./GraphQL
+  Apollo:
+    url: https://github.com/apollographql/apollo-ios
+    from: 1.15.0
+
+targets:
+  MweTasks:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: ChatCore
+        product: ChatCore
+      - package: Apollo
+        product: Apollo
+      - package: MweGraphQL
+        product: MweGraphQL
+    info:
+      path: Sources/Info.plist
+      properties:
+        UILaunchScreen: {}
+        # DEV ONLY: the demo stack speaks plain http. Simulator reaches the
+        # host via localhost; a physical device needs your machine's LAN IP
+        # (Config.swift) — NSAllowsLocalNetworking covers both on iOS 14+.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true

@@ -8,11 +8,16 @@ let executor: ExecutorApp;
 let graphqlUrl: string;
 let stopGraphql: () => Promise<void>;
 
+interface GqlResult {
+  status: number;
+  body: { data?: any; errors?: any };
+}
+
 async function gql(
   query: string,
   variables: Record<string, unknown> = {},
   token: string | null = DEV_JWT_FALLBACK,
-) {
+): Promise<GqlResult> {
   const res = await fetch(graphqlUrl, {
     method: 'POST',
     headers: {
@@ -21,7 +26,7 @@ async function gql(
     },
     body: JSON.stringify({ query, variables }),
   });
-  return { status: res.status, body: await res.json() };
+  return { status: res.status, body: (await res.json()) as GqlResult['body'] };
 }
 
 beforeAll(async () => {

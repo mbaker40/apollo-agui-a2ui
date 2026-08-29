@@ -31,4 +31,10 @@ export default tseslint.config(
       globals: { ...globals.browser },
     },
   },
+  {
+    files: ['**/test/**', '**/*.test.*'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
 );

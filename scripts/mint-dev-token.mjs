@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 
 const b64url = (input) => Buffer.from(input).toString('base64url');
 
-const secret = process.env.DEV_JWT_SECRET ?? 'dev-secret-not-for-production';
+const secret = process.env.DEV_JWT_SECRET ?? 'dev-secret-not-for-production-32b-min!';
 const sub = process.argv[2] ?? 'user-demo';
 const email = process.argv[3] ?? 'demo@example.com';
 const name = process.argv[4] ?? 'Demo User';

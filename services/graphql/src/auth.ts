@@ -7,7 +7,7 @@ export interface AuthedUser {
 }
 
 const secret = () =>
-  new TextEncoder().encode(process.env.DEV_JWT_SECRET ?? 'dev-secret-not-for-production');
+  new TextEncoder().encode(process.env.DEV_JWT_SECRET ?? 'dev-secret-not-for-production-32b-min!');
 
 /**
  * Demo-grade but real in shape: the facade verifies the end user's bearer

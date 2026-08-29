@@ -4,11 +4,11 @@
  * The secret is intentionally public; see scripts/mint-dev-token.mjs.
  */
 
-export const DEV_JWT_SECRET_FALLBACK = 'dev-secret-not-for-production';
+export const DEV_JWT_SECRET_FALLBACK = 'dev-secret-not-for-production-32b-min!';
 
 /** Long-lived token for sub=user-demo, minted by scripts/mint-dev-token.mjs. */
 export const DEV_JWT_FALLBACK =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLWRlbW8iLCJlbWFpbCI6ImRlbW9AZXhhbXBsZS5jb20iLCJuYW1lIjoiRGVtbyBVc2VyIiwiaWF0IjoxNzg3OTc3NDg5LCJleHAiOjIxMDMzMzc0ODl9.FmzoJPlYyfLYfYeXwMqBRQZCu2Q1n4w-LP2TxBDYayo';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLWRlbW8iLCJlbWFpbCI6ImRlbW9AZXhhbXBsZS5jb20iLCJuYW1lIjoiRGVtbyBVc2VyIiwiaWF0IjoxNzg3OTc4MjkzLCJleHAiOjIxMDMzMzgyOTN9.isX6kh2a1JReimbCgD9Dy5meEIpkaqnmtsr-_79_oFc';
 
 export const DEV_USER = {
   sub: 'user-demo',

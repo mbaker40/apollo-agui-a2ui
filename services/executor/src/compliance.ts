@@ -33,14 +33,45 @@ export const HEADERS = {
   toolName: 'x-tool-name',
 } as const;
 
-/** `${caller}:${tool}` → the one route (method + fastify url pattern) it may hit. */
+/**
+ * `${caller}:${tool}` → the one route (method + fastify url pattern) it may hit.
+ *
+ * SCALING NOTE (docs/SCALING.md): every mutation adds one row per caller — the
+ * table doubled when the second batch of tools landed. That linear growth is
+ * the honest cost of route-level authz; field-level authz (e.g. a generic
+ * PATCH) would additionally need per-tool body validation here.
+ */
 export const TOOL_ALLOWLIST: Record<string, { method: string; route: string }> = {
+  // agent backend tools
   'agent:create_task': { method: 'POST', route: '/tasks' },
   'agent:complete_task': { method: 'POST', route: '/tasks/:id/complete' },
   'agent:list_tasks': { method: 'GET', route: '/tasks' },
+  'agent:rename_task': { method: 'POST', route: '/tasks/:id/rename' },
+  'agent:set_due': { method: 'POST', route: '/tasks/:id/due' },
+  'agent:set_priority': { method: 'POST', route: '/tasks/:id/priority' },
+  'agent:reopen_task': { method: 'POST', route: '/tasks/:id/reopen' },
+  'agent:delete_task': { method: 'DELETE', route: '/tasks/:id' },
+  'agent:duplicate_task': { method: 'POST', route: '/tasks/:id/duplicate' },
+  'agent:clear_completed': { method: 'POST', route: '/tasks/completed/clear' },
+  'agent:create_tag': { method: 'POST', route: '/tags' },
+  'agent:tag_task': { method: 'POST', route: '/tasks/:id/tags' },
+  'agent:reset_demo': { method: 'POST', route: '/admin/reset' },
+  // graphql facade operations
   'graphql:graphql.tasks': { method: 'GET', route: '/tasks' },
+  'graphql:graphql.tags': { method: 'GET', route: '/tags' },
   'graphql:graphql.createTask': { method: 'POST', route: '/tasks' },
   'graphql:graphql.completeTask': { method: 'POST', route: '/tasks/:id/complete' },
+  'graphql:graphql.renameTask': { method: 'POST', route: '/tasks/:id/rename' },
+  'graphql:graphql.setDue': { method: 'POST', route: '/tasks/:id/due' },
+  'graphql:graphql.setPriority': { method: 'POST', route: '/tasks/:id/priority' },
+  'graphql:graphql.reopenTask': { method: 'POST', route: '/tasks/:id/reopen' },
+  'graphql:graphql.deleteTask': { method: 'DELETE', route: '/tasks/:id' },
+  'graphql:graphql.duplicateTask': { method: 'POST', route: '/tasks/:id/duplicate' },
+  'graphql:graphql.clearCompleted': { method: 'POST', route: '/tasks/completed/clear' },
+  'graphql:graphql.createTag': { method: 'POST', route: '/tags' },
+  'graphql:graphql.tagTask': { method: 'POST', route: '/tasks/:id/tags' },
+  'graphql:graphql.resetDemo': { method: 'POST', route: '/admin/reset' },
+  // observability
   'e2e:audit.read': { method: 'GET', route: '/audit' },
 };
 

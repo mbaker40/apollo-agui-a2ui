@@ -24,7 +24,11 @@ Json = dict[str, Any]
 
 
 class ExecutorError(Exception):
-    pass
+    """status_code is set for HTTP-level failures (4xx/5xx), None for transport ones."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ExecutorClient:
@@ -61,9 +65,12 @@ class ExecutorClient:
         except httpx.HTTPError as exc:  # connection refused, timeout, ...
             raise ExecutorError(f"executor unreachable: {exc}") from exc
         if res.status_code >= 400:
-            raise ExecutorError(
-                f"executor {method} {path} failed with {res.status_code}: {res.text}"
-            )
+            detail = res.text
+            try:
+                detail = res.json().get("error", detail)
+            except ValueError:
+                pass
+            raise ExecutorError(detail, status_code=res.status_code)
         return res.json()
 
     async def create_task(
@@ -79,3 +86,50 @@ class ExecutorClient:
 
     async def list_tasks(self, user: AuthedUser, run_id: str) -> list[Json]:
         return await self._call(user, run_id, "list_tasks", "GET", "/tasks")
+
+    async def rename_task(self, user: AuthedUser, run_id: str, task_id: str, title: str) -> Json:
+        return await self._call(
+            user, run_id, "rename_task", "POST", f"/tasks/{task_id}/rename", {"title": title}
+        )
+
+    async def set_due(self, user: AuthedUser, run_id: str, task_id: str, due: str | None) -> Json:
+        return await self._call(
+            user, run_id, "set_due", "POST", f"/tasks/{task_id}/due", {"due": due}
+        )
+
+    async def set_priority(
+        self, user: AuthedUser, run_id: str, task_id: str, priority: str
+    ) -> Json:
+        return await self._call(
+            user,
+            run_id,
+            "set_priority",
+            "POST",
+            f"/tasks/{task_id}/priority",
+            {"priority": priority},
+        )
+
+    async def reopen_task(self, user: AuthedUser, run_id: str, task_id: str) -> Json:
+        return await self._call(user, run_id, "reopen_task", "POST", f"/tasks/{task_id}/reopen")
+
+    async def delete_task(self, user: AuthedUser, run_id: str, task_id: str) -> Json:
+        return await self._call(user, run_id, "delete_task", "DELETE", f"/tasks/{task_id}")
+
+    async def duplicate_task(self, user: AuthedUser, run_id: str, task_id: str) -> Json:
+        return await self._call(
+            user, run_id, "duplicate_task", "POST", f"/tasks/{task_id}/duplicate"
+        )
+
+    async def clear_completed(self, user: AuthedUser, run_id: str) -> Json:
+        return await self._call(user, run_id, "clear_completed", "POST", "/tasks/completed/clear")
+
+    async def create_tag(self, user: AuthedUser, run_id: str, name: str) -> Json:
+        return await self._call(user, run_id, "create_tag", "POST", "/tags", {"name": name})
+
+    async def tag_task(self, user: AuthedUser, run_id: str, task_id: str, name: str) -> Json:
+        return await self._call(
+            user, run_id, "tag_task", "POST", f"/tasks/{task_id}/tags", {"name": name}
+        )
+
+    async def reset_demo(self, user: AuthedUser, run_id: str) -> Json:
+        return await self._call(user, run_id, "reset_demo", "POST", "/admin/reset")

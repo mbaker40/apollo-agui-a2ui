@@ -4,6 +4,7 @@ import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonContentPolymorphicSerializer
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -83,7 +84,10 @@ data class RunAgentInput(
     val runId: String,
     val messages: List<Message>,
     val tools: List<ToolDefinition> = emptyList(),
+    // context and forwardedProps are REQUIRED keys in the AG-UI RunAgentInput
+    // (the Python SDK rejects a body missing them), so they are non-nullable
+    // with always-encoded defaults rather than omittable optionals.
     val context: List<JsonElement> = emptyList(),
-    val state: JsonElement? = null,
-    val forwardedProps: JsonElement? = null,
+    val state: JsonElement = JsonNull,
+    val forwardedProps: JsonElement = JsonNull,
 )

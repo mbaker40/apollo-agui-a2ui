@@ -38,8 +38,13 @@ class OkHttpTransportTest {
                 val request = server.takeRequest()
                 assertEquals("POST", request.method)
                 assertEquals("Bearer dev-token", request.getHeader("authorization"))
-                val sent = AgUiJson.decodeFromString(RunAgentInput.serializer(), request.body.readUtf8())
+                val rawBody = request.body.readUtf8()
+                val sent = AgUiJson.decodeFromString(RunAgentInput.serializer(), rawBody)
                 assertEquals("add a task to buy milk", (sent.messages.single() as UserMessage).content)
+                // The AG-UI Python SDK REQUIRES these keys; omitting them is a 422.
+                for (requiredKey in listOf("\"context\":", "\"forwardedProps\":", "\"tools\":")) {
+                    assertTrue(rawBody.contains(requiredKey), "body must contain $requiredKey")
+                }
             }
         }
 

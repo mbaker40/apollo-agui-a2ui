@@ -1,0 +1,17 @@
+{
+  "name": "@mwe/e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@mwe/contracts": "workspace:*",
+    "@types/node": "^22.19.11",
+    "tsx": "^4.23.12",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

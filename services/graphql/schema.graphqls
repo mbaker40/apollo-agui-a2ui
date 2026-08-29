@@ -41,15 +41,11 @@ type Mutation {
   setPriority(id: ID!, priority: Priority!): Task!
   reopenTask(id: ID!): Task!
 
-  """
-  Returns the deleted task.
-  """
+  """Returns the deleted task."""
   deleteTask(id: ID!): Task!
   duplicateTask(id: ID!): Task!
 
-  """
-  Returns the tasks that were removed.
-  """
+  """Returns the tasks that were removed."""
   clearCompleted: [Task!]!
   createTag(name: String!): Tag!
 

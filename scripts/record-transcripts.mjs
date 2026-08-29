@@ -123,19 +123,14 @@ for (const port of [EXECUTOR_PORT, AGENT_PORT]) {
   if (busy) throw new Error(`port ${port} is already in use — kill the stale service first`);
 }
 
-const executor = spawnService(
-  'executor',
-  'npx',
-  ['tsx', 'src/main.ts'],
-  {
-    cwd: join(repoRoot, 'services', 'executor'),
-    env: {
-      ...process.env,
-      EXECUTOR_PORT: String(EXECUTOR_PORT),
-      EXECUTOR_DATA_DIR: mkdtempSync(join(tmpdir(), 'transcript-exec-')),
-    },
+const executor = spawnService('executor', 'npx', ['tsx', 'src/main.ts'], {
+  cwd: join(repoRoot, 'services', 'executor'),
+  env: {
+    ...process.env,
+    EXECUTOR_PORT: String(EXECUTOR_PORT),
+    EXECUTOR_DATA_DIR: mkdtempSync(join(tmpdir(), 'transcript-exec-')),
   },
-);
+});
 await waitForHealth(`http://127.0.0.1:${EXECUTOR_PORT}/healthz`);
 
 const agent = spawnService(
@@ -237,7 +232,10 @@ try {
   // 6. Executor down → RUN_ERROR.
   killGroup(executor);
   await new Promise((r) => setTimeout(r, 1000));
-  await record('run_error.sse', runInput({ runId: 'run_rec_6', text: 'add a task to call the vet' }));
+  await record(
+    'run_error.sse',
+    runInput({ runId: 'run_rec_6', text: 'add a task to call the vet' }),
+  );
 
   console.log('all transcripts recorded');
 } finally {

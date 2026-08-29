@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://apollo-agui-a2ui.invalid/contracts/entity_changed.schema.json",
+  "title": "entity_changed payload",
+  "description": "Payload of the AG-UI CUSTOM event named 'entity_changed', emitted by the agent after a backend tool mutates an entity. Clients use it to reconcile their GraphQL caches.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["typename", "id", "kind", "scope"],
+  "properties": {
+    "typename": {
+      "type": "string",
+      "minLength": 1,
+      "description": "GraphQL __typename of the changed entity, e.g. 'Task'"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Entity id as exposed by the GraphQL schema"
+    },
+    "kind": {
+      "enum": ["CREATED", "UPDATED", "DELETED"],
+      "description": "What happened to the entity"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Coarse invalidation scope. Mobile screens subscribe to the bus filtered by the scope(s) they render; v1 uses the single scope 'tasks'."
+    }
+  }
+}

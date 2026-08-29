@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+pnpm-lock.yaml
+.venv/
+services/agent/
+packages/chat-core-kotlin/
+packages/chat-core-swift/
+apps/android/
+apps/ios/
+contracts/fixtures/transcripts/
+*.gradle*

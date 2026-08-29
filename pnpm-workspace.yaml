@@ -1,0 +1,6 @@
+packages:
+  - contracts
+  - services/executor
+  - services/graphql
+  - apps/web
+  - e2e

@@ -34,7 +34,7 @@ importers:
         version: 0.0.59
       '@apollo/client':
         specifier: ^4.2.12
-        version: 4.2.12(graphql@16.14.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(rxjs@7.8.2)
+        version: 4.2.12(graphql@16.14.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(rxjs@7.8.1)
       '@mwe/contracts':
         specifier: workspace:*
         version: link:../../contracts
@@ -48,12 +48,15 @@ importers:
         specifier: ^19.2.8
         version: 19.2.8(react@19.2.8)
       rxjs:
-        specifier: ^7.8.2
-        version: 7.8.2
+        specifier: 7.8.1
+        version: 7.8.1
     devDependencies:
       '@testing-library/react':
         specifier: ^16.3.3
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@types/node':
+        specifier: ^22.19.11
+        version: 22.20.1
       '@types/react':
         specifier: ^19.2.18
         version: 19.2.18
@@ -1675,9 +1678,6 @@ packages:
   rxjs@7.8.1:
     resolution: {integrity: sha512-AA3TVj+0A2iuIoQkWEK/tqFjBq2j+6PO6Y0zJcvzLAFhEFIO3HL0vls9hWLncZbAAbK0mar7oZ4V079I/qPMxg==}
 
-  rxjs@7.8.2:
-    resolution: {integrity: sha512-dhKf903U/PQZY6boNNtAGdWbG85WAbjT/1xYoZIC7FAY0yWapOBQVsVrDl58W86//e1VpMNBtRV4MaXfdMySFA==}
-
   safe-buffer@5.2.1:
     resolution: {integrity: sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==}
 
@@ -2056,7 +2056,7 @@ snapshots:
     dependencies:
       graphql: 16.14.2
 
-  '@apollo/client@4.2.12(graphql@16.14.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(rxjs@7.8.2)':
+  '@apollo/client@4.2.12(graphql@16.14.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(rxjs@7.8.1)':
     dependencies:
       '@graphql-typed-document-node/core': 3.2.0(graphql@16.14.2)
       '@wry/caches': 1.0.1
@@ -2065,7 +2065,7 @@ snapshots:
       graphql: 16.14.2
       graphql-tag: 2.12.7(graphql@16.14.2)
       optimism: 0.18.1
-      rxjs: 7.8.2
+      rxjs: 7.8.1
       tslib: 2.8.1
     optionalDependencies:
       react: 19.2.8
@@ -3469,10 +3469,6 @@ snapshots:
       '@rolldown/binding-win32-x64-msvc': 1.2.6
 
   rxjs@7.8.1:
-    dependencies:
-      tslib: 2.8.1
-
-  rxjs@7.8.2:
     dependencies:
       tslib: 2.8.1
 

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ChatController } from '../lib/agent';
 
 function ToolChip({ name, args, done }: { name: string; args: string; done: boolean }) {
-  let argText = '';
+  let argText: string;
   try {
     const parsed = JSON.parse(args || '{}');
     argText = Object.values(parsed).filter(Boolean).join(', ');

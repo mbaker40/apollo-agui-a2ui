@@ -133,7 +133,7 @@ const executor = spawnService('executor', 'npx', ['tsx', 'src/main.ts'], {
 });
 await waitForHealth(`http://127.0.0.1:${EXECUTOR_PORT}/healthz`);
 
-const agent = spawnService(
+spawnService(
   'agent',
   'uv',
   ['run', 'uvicorn', 'agent.main:app', '--host', '127.0.0.1', '--port', String(AGENT_PORT)],

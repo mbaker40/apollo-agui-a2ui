@@ -164,6 +164,7 @@ describe('entity_changed → RefetchEventManager reconciliation', () => {
       scope: 'tasks',
     });
     await waitFor(() => expect(view.queryByTestId('task-task_0001')).toBeNull());
-    expect(h.client.cache.extract()['Task:task_0001']).toBeUndefined();
+    const extracted = h.client.cache.extract() as Record<string, unknown>;
+    expect(extracted['Task:task_0001']).toBeUndefined();
   });
 });

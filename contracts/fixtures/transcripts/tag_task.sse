@@ -1,0 +1,36 @@
+data: {"type":"RUN_STARTED","threadId":"thread_rec","runId":"run_rec_7"}
+
+data: {"type":"TOOL_CALL_START","toolCallId":"run_rec_7_call_1","toolCallName":"list_tasks","parentMessageId":"run_rec_7_msg_2"}
+
+data: {"type":"TOOL_CALL_ARGS","toolCallId":"run_rec_7_call_1","delta":"{}"}
+
+data: {"type":"TOOL_CALL_END","toolCallId":"run_rec_7_call_1"}
+
+data: {"type":"TOOL_CALL_RESULT","messageId":"run_rec_7_msg_3","toolCallId":"run_rec_7_call_1","content":"[{\"id\": \"task_0001\", \"title\": \"buy milk\", \"due\": null, \"completed\": true, \"priority\": \"MEDIUM\", \"createdAt\": \"2026-08-29T06:17:26.401Z\", \"tags\": []}, {\"id\": \"task_0002\", \"title\": \"call the vet\", \"due\": null, \"completed\": false, \"priority\": \"MEDIUM\", \"createdAt\": \"2026-08-29T06:17:26.426Z\", \"tags\": []}]","role":"tool"}
+
+data: {"type":"TOOL_CALL_START","toolCallId":"run_rec_7_call_4","toolCallName":"tag_task","parentMessageId":"run_rec_7_msg_5"}
+
+data: {"type":"TOOL_CALL_ARGS","toolCallId":"run_rec_7_call_4","delta":"{\"id\": \"task_0002\", \"name\": \"urgent\"}"}
+
+data: {"type":"TOOL_CALL_END","toolCallId":"run_rec_7_call_4"}
+
+data: {"type":"TOOL_CALL_RESULT","messageId":"run_rec_7_msg_6","toolCallId":"run_rec_7_call_4","content":"{\"task\": {\"id\": \"task_0002\", \"title\": \"call the vet\", \"due\": null, \"completed\": false, \"priority\": \"MEDIUM\", \"createdAt\": \"2026-08-29T06:17:26.426Z\", \"tags\": [{\"id\": \"tag_0001\", \"name\": \"urgent\", \"createdAt\": \"2026-08-29T06:17:26.433Z\"}]}, \"tag\": {\"id\": \"tag_0001\", \"name\": \"urgent\", \"createdAt\": \"2026-08-29T06:17:26.433Z\"}, \"tagCreated\": true}","role":"tool"}
+
+data: {"type":"CUSTOM","name":"entity_changed","value":{"typename":"Task","id":"task_0002","kind":"UPDATED","scope":"tasks"}}
+
+data: {"type":"CUSTOM","name":"entity_changed","value":{"typename":"Tag","id":"tag_0001","kind":"CREATED","scope":"tags"}}
+
+data: {"type":"TEXT_MESSAGE_START","messageId":"run_rec_7_msg_7","role":"assistant"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"run_rec_7_msg_7","delta":"Tagged \"call"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"run_rec_7_msg_7","delta":" the vet\""}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"run_rec_7_msg_7","delta":" with 'urgent'"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"run_rec_7_msg_7","delta":" (new tag)."}
+
+data: {"type":"TEXT_MESSAGE_END","messageId":"run_rec_7_msg_7"}
+
+data: {"type":"RUN_FINISHED","threadId":"thread_rec","runId":"run_rec_7"}
+

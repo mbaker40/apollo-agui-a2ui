@@ -151,10 +151,7 @@ describe('executor v2 operations', () => {
       url: '/tasks/completed/clear',
       headers: headers('clear_completed'),
     });
-    expect(res.json().deleted.map((t: { id: string }) => t.id)).toEqual([
-      'task_0001',
-      'task_0002',
-    ]);
+    expect(res.json().deleted.map((t: { id: string }) => t.id)).toEqual(['task_0001', 'task_0002']);
 
     const list = await ctx.app.inject({
       method: 'GET',

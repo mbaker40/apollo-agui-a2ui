@@ -90,6 +90,21 @@ const OPEN_TASK_TOOL = {
   },
 };
 
+/** Run a seeding conversation without saving a fixture. */
+async function play(body) {
+  const res = await fetch(AGENT_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'text/event-stream',
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`seed run failed with ${res.status}: ${await res.text()}`);
+  await res.text();
+}
+
 async function record(file, body) {
   const res = await fetch(AGENT_URL, {
     method: 'POST',
@@ -229,12 +244,31 @@ try {
     runInput({ runId: 'run_rec_5', text: 'open the milk task' }),
   );
 
-  // 6. Executor down → RUN_ERROR.
+  // 6. Seed a second task (not saved as a fixture), then the v2 scenarios.
+  await play(runInput({ runId: 'run_rec_6', text: 'add a task to call the vet' }));
+
+  // 7. Cross-entity + cross-scope: tag_task auto-creates the tag →
+  //    Task UPDATED (scope tasks) AND Tag CREATED (scope tags) in one run.
+  await record(
+    'tag_task.sse',
+    runInput({ runId: 'run_rec_7', text: 'tag the vet task as urgent' }),
+  );
+
+  // 8. The DELETED kind finally has a producer.
+  await record('delete_task.sse', runInput({ runId: 'run_rec_8', text: 'delete the vet task' }));
+
+  // 9. Bulk: one entity_changed per removed task ("buy milk" was completed in 2).
+  await record(
+    'clear_completed.sse',
+    runInput({ runId: 'run_rec_9', text: 'clear my completed tasks' }),
+  );
+
+  // 10. Executor down → RUN_ERROR.
   killGroup(executor);
   await new Promise((r) => setTimeout(r, 1000));
   await record(
     'run_error.sse',
-    runInput({ runId: 'run_rec_6', text: 'add a task to call the vet' }),
+    runInput({ runId: 'run_rec_10', text: 'add a task to call the vet' }),
   );
 
   console.log('all transcripts recorded');

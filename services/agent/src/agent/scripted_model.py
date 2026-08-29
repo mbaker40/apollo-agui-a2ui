@@ -70,7 +70,7 @@ TXT_HELP = (
 )
 
 _STOPWORDS = frozenset(
-    ["a", "an", "the", "i", "im", "is", "it", "of", "to", "my", "me", "with", "that", "this", "one", "task", "tasks", "done", "complete", "completed", "finish", "finished", "open", "show", "view", "add", "create", "new", "please", "mark", "as", "rename", "delete", "remove", "duplicate", "copy", "reopen", "clear", "make", "set", "priority", "due", "tag", "by", "on", "for"]
+    ["a", "an", "the", "i", "im", "is", "it", "of", "to", "my", "me", "with", "that", "this", "one", "task", "tasks", "done", "complete", "completed", "finish", "finished", "open", "show", "view", "add", "create", "new", "please", "mark", "as", "rename", "delete", "remove", "duplicate", "reopen", "clear", "make", "set", "priority", "due", "tag", "by", "on", "for"]
 )
 
 
@@ -414,7 +414,9 @@ _ROUTES: list[tuple[re.Pattern[str], Handler]] = [
     (re.compile(r"\bclear\b", re.I), _handle_clear),
     (re.compile(r"\b(?:add|create)\b[^.]*\btag\b", re.I), _handle_create_tag),
     (re.compile(r"\b(?:add|create)\b", re.I), _handle_add),
-    (re.compile(r"\b(?:duplicate|copy)\b", re.I), _handle_duplicate),
+    # Verb-anchored: mid-sentence 'copy' must not swallow "done with the
+    # copy one" — a real collision this router grew during v2 (docs/SCALING.md).
+    (re.compile(r"^\s*(?:please\s+)?(?:duplicate|copy)\b", re.I), _handle_duplicate),
     (re.compile(r"\brename\b", re.I), _handle_rename),
     (re.compile(r"\bdue\b", re.I), _handle_due),
     (re.compile(r"\b(?:low|medium|high)\s+priority\b|\bpriority\b", re.I), _handle_priority),

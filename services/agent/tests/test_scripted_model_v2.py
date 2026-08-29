@@ -186,3 +186,13 @@ def test_generic_tool_error_rule() -> None:
     assert next_action(errored, NO_FE) == SayAction(
         TXT_TOOL_ERROR.format(error="'tomorrow' is not a valid ISO date (expected YYYY-MM-DD)")
     )
+
+
+def test_router_guard_mid_sentence_copy_still_completes() -> None:
+    # "copy" as a noun must not trigger the duplicate intent (verb-anchored).
+    phrase = "I'm done with the copy one"
+    assert next_action([user_msg(phrase)], NO_FE) == ToolCallAction("list_tasks")
+    listed = with_list(
+        phrase, [MILK, {"id": "task_0003", "title": "buy milk (copy)", "completed": False}]
+    )
+    assert next_action(listed, NO_FE) == ToolCallAction("complete_task", {"id": "task_0003"})

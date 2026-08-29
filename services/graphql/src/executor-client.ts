@@ -52,7 +52,13 @@ export class ExecutorClient {
     return (await res.json()) as T;
   }
 
-  private task(user: AuthedUser, tool: string, method: 'POST' | 'DELETE', path: string, body?: unknown) {
+  private task(
+    user: AuthedUser,
+    tool: string,
+    method: 'POST' | 'DELETE',
+    path: string,
+    body?: unknown,
+  ) {
     return this.call<TaskDto>(user, tool, method, path, body);
   }
 
@@ -69,23 +75,42 @@ export class ExecutorClient {
   }
 
   completeTask(user: AuthedUser, id: string): Promise<TaskDto> {
-    return this.task(user, 'graphql.completeTask', 'POST', `/tasks/${encodeURIComponent(id)}/complete`);
+    return this.task(
+      user,
+      'graphql.completeTask',
+      'POST',
+      `/tasks/${encodeURIComponent(id)}/complete`,
+    );
   }
 
   renameTask(user: AuthedUser, id: string, title: string): Promise<TaskDto> {
-    return this.task(user, 'graphql.renameTask', 'POST', `/tasks/${encodeURIComponent(id)}/rename`, {
-      title,
-    });
+    return this.task(
+      user,
+      'graphql.renameTask',
+      'POST',
+      `/tasks/${encodeURIComponent(id)}/rename`,
+      {
+        title,
+      },
+    );
   }
 
   setDue(user: AuthedUser, id: string, due: string | null): Promise<TaskDto> {
-    return this.task(user, 'graphql.setDue', 'POST', `/tasks/${encodeURIComponent(id)}/due`, { due });
+    return this.task(user, 'graphql.setDue', 'POST', `/tasks/${encodeURIComponent(id)}/due`, {
+      due,
+    });
   }
 
   setPriority(user: AuthedUser, id: string, priority: string): Promise<TaskDto> {
-    return this.task(user, 'graphql.setPriority', 'POST', `/tasks/${encodeURIComponent(id)}/priority`, {
-      priority,
-    });
+    return this.task(
+      user,
+      'graphql.setPriority',
+      'POST',
+      `/tasks/${encodeURIComponent(id)}/priority`,
+      {
+        priority,
+      },
+    );
   }
 
   reopenTask(user: AuthedUser, id: string): Promise<TaskDto> {
@@ -97,7 +122,12 @@ export class ExecutorClient {
   }
 
   duplicateTask(user: AuthedUser, id: string): Promise<TaskDto> {
-    return this.task(user, 'graphql.duplicateTask', 'POST', `/tasks/${encodeURIComponent(id)}/duplicate`);
+    return this.task(
+      user,
+      'graphql.duplicateTask',
+      'POST',
+      `/tasks/${encodeURIComponent(id)}/duplicate`,
+    );
   }
 
   clearCompleted(user: AuthedUser): Promise<{ deleted: TaskDto[] }> {

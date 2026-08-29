@@ -127,10 +127,7 @@ export class DemoStore {
   }
 
   /** Attaches a tag by name, auto-creating it if missing (idempotent per task). */
-  tagTask(
-    taskId: string,
-    name: string,
-  ): { task: Task; tag: Tag; tagCreated: boolean } | undefined {
+  tagTask(taskId: string, name: string): { task: Task; tag: Tag; tagCreated: boolean } | undefined {
     const record = this.tasks.get(taskId);
     if (!record) return undefined;
     const existing = this.findTagByName(name);

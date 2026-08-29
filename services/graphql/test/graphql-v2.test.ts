@@ -35,7 +35,9 @@ afterAll(async () => {
 
 describe('graphql v2 operations round-trip through the executor', () => {
   it('walks the whole new surface in one scripted sequence', async () => {
-    const created = await gql('mutation { createTask(title: "buy milk") { id priority tags { id } } }');
+    const created = await gql(
+      'mutation { createTask(title: "buy milk") { id priority tags { id } } }',
+    );
     expect(created.data.createTask).toEqual({ id: 'task_0001', priority: 'MEDIUM', tags: [] });
 
     const renamed = await gql(

@@ -1,13 +1,8 @@
 {
-  "name": "@mwe/executor",
+  "name": "@mwe/graphql",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "main": "./src/server.ts",
-  "types": "./src/server.ts",
-  "exports": {
-    ".": "./src/server.ts"
-  },
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
@@ -15,9 +10,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "fastify": "^5.12.1"
+    "@apollo/server": "^5.5.1",
+    "@mwe/contracts": "workspace:*",
+    "graphql": "^16.12.0",
+    "jose": "^6.2.10"
   },
   "devDependencies": {
+    "@mwe/executor": "workspace:*",
     "@types/node": "^22.19.11",
     "tsx": "^4.23.12",
     "typescript": "~5.9.3",

@@ -1,0 +1,20 @@
+type Task {
+  id: ID!
+  title: String!
+  due: String
+  completed: Boolean!
+}
+
+type Query {
+  tasks: [Task!]!
+}
+
+"""
+Mutations exist for completeness and manual testing. The agent's chat path
+deliberately does NOT use them — backend tools call the executor's REST API
+directly; clients reconcile via AG-UI entity_changed events.
+"""
+type Mutation {
+  createTask(title: String!, due: String): Task!
+  completeTask(id: ID!): Task!
+}

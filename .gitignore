@@ -1,0 +1,52 @@
+# === Node / TypeScript ===
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+.turbo/
+
+# === Python ===
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# === Kotlin / Gradle / Android ===
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.kotlin/
+captures/
+
+# === Swift / Xcode ===
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcodeproj/
+# Apollo iOS generated package (regenerate: see apps/ios/README.md)
+apps/ios/GraphQL/
+
+# === Env & secrets (commit .env.example instead) ===
+.env
+.env.*
+!.env.example
+
+# === Local datastores & logs ===
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+services/executor/data/
+*.log
+logs/
+
+# === OS noise ===
+.DS_Store
+Thumbs.db

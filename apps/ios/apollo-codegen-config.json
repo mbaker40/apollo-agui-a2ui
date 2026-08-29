@@ -1,0 +1,15 @@
+{
+  "schemaNamespace": "MweGraphQL",
+  "input": {
+    "operationSearchPaths": ["graphql/**/*.graphql"],
+    "schemaSearchPaths": ["../../services/graphql/schema.graphqls"]
+  },
+  "output": {
+    "testMocks": { "none": {} },
+    "schemaTypes": {
+      "path": "./GraphQL",
+      "moduleType": { "swiftPackageManager": {} }
+    },
+    "operations": { "inSchemaModule": {} }
+  }
+}

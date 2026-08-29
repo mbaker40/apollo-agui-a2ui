@@ -1,0 +1,14 @@
+data: {"type":"RUN_STARTED","threadId":"thread_rec","runId":"run_rec_4"}
+
+data: {"type":"TEXT_MESSAGE_START","messageId":"run_rec_4_msg_1","role":"assistant"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"run_rec_4_msg_1","delta":"Opened \"buy"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"run_rec_4_msg_1","delta":" milk\" for"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"run_rec_4_msg_1","delta":" you."}
+
+data: {"type":"TEXT_MESSAGE_END","messageId":"run_rec_4_msg_1"}
+
+data: {"type":"RUN_FINISHED","threadId":"thread_rec","runId":"run_rec_4"}
+

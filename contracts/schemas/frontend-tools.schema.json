@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://apollo-agui-a2ui.invalid/contracts/frontend-tools.schema.json",
+  "title": "Frontend tool declaration",
+  "description": "Shape of a client-declared tool as sent in RunAgentInput.tools. The agent may only call tools the current run declared (capability-aware).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "description", "parameters"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parameters": {
+      "type": "object",
+      "description": "JSON Schema (draft 2020-12) describing the tool's arguments object"
+    }
+  }
+}

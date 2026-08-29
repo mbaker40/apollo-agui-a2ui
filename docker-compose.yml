@@ -1,0 +1,55 @@
+# One-command containerized bring-up: docker compose up --build
+# (The authoring session's egress policy blocked registry blob downloads, so
+# this file is validated with `docker compose config` there and image builds
+# are verified locally — see README verification matrix.)
+services:
+  executor:
+    build:
+      context: .
+      dockerfile: services/executor/Dockerfile
+    ports:
+      - '7460:7460'
+    environment:
+      EXECUTOR_PORT: '7460'
+      EXECUTOR_DATA_DIR: /data
+    volumes:
+      - executor-data:/data
+
+  graphql:
+    build:
+      context: .
+      dockerfile: services/graphql/Dockerfile
+    ports:
+      - '7461:7461'
+    environment:
+      GRAPHQL_PORT: '7461'
+      EXECUTOR_URL: http://executor:7460
+    depends_on:
+      - executor
+
+  agent:
+    build:
+      context: .
+      dockerfile: services/agent/Dockerfile
+    ports:
+      - '7462:7462'
+    environment:
+      AGENT_PORT: '7462'
+      EXECUTOR_URL: http://executor:7460
+    depends_on:
+      - executor
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - '7463:7463'
+    environment:
+      WEB_PORT: '7463'
+    depends_on:
+      - graphql
+      - agent
+
+volumes:
+  executor-data:

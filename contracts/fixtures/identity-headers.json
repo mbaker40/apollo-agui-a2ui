@@ -1,0 +1,7 @@
+{
+  "callerService": "x-caller-service",
+  "userId": "x-user-id",
+  "userEmail": "x-user-email",
+  "agentRunId": "x-agent-run-id",
+  "toolName": "x-tool-name"
+}

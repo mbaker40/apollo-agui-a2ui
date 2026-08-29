@@ -29,6 +29,10 @@ the run's SSE stream:
   **before** the confirmation text for that tool, so a client that reconciles on
   receipt shows fresh data by the time the assistant's confirmation lands.
 - Read-only tools (`list_tasks`) emit nothing.
+- A run may carry **any number** of events: bulk tools (`clear_completed`)
+  emit one per touched entity; cross-entity tools (`tag_task`) and
+  cross-scope tools (`reset_demo`) emit across typenames AND scopes
+  (`tasks`, `tags`) in one run. Consumers must not assume one-per-run.
 
 ## Consumers
 
@@ -54,8 +58,8 @@ queries with their own variables using a network-only fetch policy
 normalized cache and notifies watchers.
 
 `scope` exists so a screen doesn't need to know every query another screen
-runs — it re-runs _its own_ queries when a scope it renders is touched. v1 has
-the single scope `tasks`.
+runs — it re-runs _its own_ queries when a scope it renders is touched.
+Current scopes: `tasks`, `tags`.
 
 ## Conformance
 

@@ -5,6 +5,7 @@ GraphQL is the read/UI plane; writes triggered by the agent go straight to the
 service that owns the datastore, through its compliance middleware.
 """
 
+import contextlib
 from typing import Any
 
 import httpx
@@ -66,10 +67,8 @@ class ExecutorClient:
             raise ExecutorError(f"executor unreachable: {exc}") from exc
         if res.status_code >= 400:
             detail = res.text
-            try:
+            with contextlib.suppress(ValueError):
                 detail = res.json().get("error", detail)
-            except ValueError:
-                pass
             raise ExecutorError(detail, status_code=res.status_code)
         return res.json()
 

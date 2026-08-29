@@ -68,15 +68,15 @@ fixtures, identity-header names, and recorded real-agent SSE transcripts.
 | Path                         | What                                                                                     | Tested by            |
 | ---------------------------- | ---------------------------------------------------------------------------------------- | -------------------- |
 | `contracts/`                 | Cross-platform source of truth (schemas, fixtures, transcripts)                          | vitest conformance   |
-| `services/executor/`         | True-backend stand-in: task store, REST API, compliance middleware, audit log            | vitest (11)          |
-| `services/graphql/`          | Apollo Server 5 facade over the executor REST API (owns no data)                         | vitest (5)           |
-| `services/agent/`            | AG-UI SSE endpoint, scripted model, backend tools, `entity_changed`                      | pytest (22)          |
-| `apps/web/`                  | React + Apollo Client 4.2 + raw `@ag-ui/client` chat, RefetchEventManager reconciliation | vitest (8)           |
+| `services/executor/`         | True-backend stand-in: task store, REST API, compliance middleware, audit log            | vitest (23)          |
+| `services/graphql/`          | Apollo Server 5 facade over the executor REST API (owns no data)                         | vitest (19)          |
+| `services/agent/`            | AG-UI SSE endpoint, scripted model, backend tools, `entity_changed`                      | pytest (40)          |
+| `apps/web/`                  | React + Apollo Client 4.2 + raw `@ag-ui/client` chat, RefetchEventManager reconciliation | vitest (11)          |
 | `apps/android/`              | Thin Compose + Apollo Kotlin shell over the Kotlin core                                  | build locally        |
 | `apps/ios/`                  | Thin SwiftUI + Apollo iOS shell over the Swift core (XcodeGen)                           | build locally        |
-| `packages/chat-core-kotlin/` | Pure-JVM AG-UI core: SSE parser, session/tool loop, invalidation bus                     | JUnit (17)           |
+| `packages/chat-core-kotlin/` | Pure-JVM AG-UI core: SSE parser, session/tool loop, invalidation bus                     | JUnit (20)           |
 | `packages/chat-core-swift/`  | SwiftPM mirror of the Kotlin core, Linux-testable                                        | `swift test` locally |
-| `e2e/`                       | Scripted conversations against the live 3-service stack                                  | vitest (6)           |
+| `e2e/`                       | Scripted conversations against the live 3-service stack                                  | vitest (19)          |
 
 ## Prerequisites
 
@@ -98,6 +98,8 @@ git clone <this repo> && cd apollo-agui-a2ui
 make setup        # pnpm install + uv sync
 make dev          # executor + graphql + agent + web as local processes
 # open http://localhost:7463 and type: add a task to buy milk
+# then try: make the milk task high priority · tag the milk task as urgent
+#           the milk task is due 2026-09-01 · clear my completed tasks · start over
 ```
 
 Containerized alternative: `docker compose up --build` (same ports).
@@ -140,6 +142,15 @@ audit attribution, read-then-write, and the hybrid frontend-tool round trip
 
 Full transcripts and the exact blocked-network details:
 [docs/VERIFICATION.md](docs/VERIFICATION.md).
+
+## How it scales
+
+Thirteen backend tools now flow through the stack (create/complete/list plus
+ten more probing bulk events, cross-entity + cross-scope writes, validation
+and conflict edges, a schema field addition, and DELETED reconciliation).
+The measured result — which layers grow linearly, which stay flat (the mobile
+cores and the event protocol changed by **zero lines**), and the real
+friction hit along the way — is written up in **[docs/SCALING.md](docs/SCALING.md)**.
 
 ## Design decisions (and divergences from the handoff doc)
 

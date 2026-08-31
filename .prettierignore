@@ -6,6 +6,7 @@ pnpm-lock.yaml
 services/agent/
 packages/chat-core-kotlin/
 packages/chat-core-swift/
+packages/a2ui-bridge/
 apps/android/
 apps/ios/
 contracts/fixtures/transcripts/

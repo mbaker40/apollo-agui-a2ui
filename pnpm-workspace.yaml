@@ -3,4 +3,7 @@ packages:
   - services/executor
   - services/graphql
   - apps/web
+  - apps/catalog
+  - apps/composer
+  - packages/a2ui-bridge
   - e2e

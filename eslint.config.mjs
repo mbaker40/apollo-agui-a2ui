@@ -11,6 +11,7 @@ export default tseslint.config(
       'services/agent/**',
       'packages/chat-core-kotlin/**',
       'packages/chat-core-swift/**',
+      'packages/a2ui-bridge/**',
       'apps/android/**',
       'apps/ios/**',
     ],
@@ -26,7 +27,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['apps/web/**'],
+    files: ['apps/web/**', 'apps/catalog/**', 'apps/composer/**'],
     languageOptions: {
       globals: { ...globals.browser },
     },

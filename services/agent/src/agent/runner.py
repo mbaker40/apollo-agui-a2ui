@@ -5,6 +5,11 @@ next action → execute backend tools against the executor → feed results back
 repeat, until the model speaks (run ends) or calls a frontend tool (run ends
 deferred; the client executes it and starts a continuation run).
 
+Tool failures come in two flavors, deliberately:
+- an executor 4xx (validation, conflict, not-found) becomes a structured
+  ERROR RESULT the model can react to with friendly text — the run survives;
+- transport failures and 5xx abort the run with a protocol-level RUN_ERROR.
+
 TRACING HOOK: in production a Langfuse (or OTel) trace would wrap this loop —
 one span per run keyed by run_id, one child span per tool call, sharing the
 same run id the executor writes to its audit log. Deliberately absent here.
@@ -36,11 +41,11 @@ from ag_ui.core import (
 )
 
 from .auth import AuthedUser
-from .executor_client import ExecutorClient
-from .scripted_model import BACKEND_TOOLS, SayAction, ToolCallAction, next_action
+from .backend_tools import BACKEND_TOOL_SPECS
+from .executor_client import ExecutorClient, ExecutorError
+from .scripted_model import SayAction, ToolCallAction, next_action
 
 ENTITY_CHANGED = "entity_changed"
-SCOPE_TASKS = "tasks"
 _MAX_STEPS = 8
 
 
@@ -103,14 +108,25 @@ async def run_agent(
                 )
             )
 
-            if action.name not in BACKEND_TOOLS:
+            spec = BACKEND_TOOL_SPECS.get(action.name)
+            if spec is None:
                 # Frontend tool: defer to the client. It executes the tool,
                 # appends the tool result message, and starts a continuation
                 # run (see /contracts/frontend-tools.md).
                 yield RunFinishedEvent(thread_id=run_input.thread_id, run_id=run_id)
                 return
 
-            result = await _execute_backend_tool(executor, user, run_id, action)
+            changes: list[dict[str, str]] = []
+            try:
+                result = await spec.execute(executor, user, run_id, action.args)
+                changes = spec.changes(result)
+            except ExecutorError as exc:
+                if exc.status_code is None or exc.status_code >= 500:
+                    raise
+                # 4xx: the tool failed in a way the model can talk about —
+                # validation, conflict, not-found. No entity changed.
+                result = {"error": str(exc)}
+
             result_json = json.dumps(result)
             result_msg_id = next_id("msg")
             yield ToolCallResultEvent(
@@ -118,39 +134,11 @@ async def run_agent(
             )
             working.append(ToolMessage(id=result_msg_id, tool_call_id=call_id, content=result_json))
 
-            changed = _entity_change_for(action.name, result)
-            if changed is not None:
-                yield CustomEvent(name=ENTITY_CHANGED, value=changed)
+            for change in changes:
+                yield CustomEvent(name=ENTITY_CHANGED, value=change)
 
         yield RunErrorEvent(
             message=f"scripted model exceeded {_MAX_STEPS} steps", code="loop_limit"
         )
     except Exception as exc:  # noqa: BLE001 — surface any failure as a protocol-level RUN_ERROR
         yield RunErrorEvent(message=str(exc), code="agent_error")
-
-
-async def _execute_backend_tool(
-    executor: ExecutorClient, user: AuthedUser, run_id: str, action: ToolCallAction
-) -> object:
-    if action.name == "create_task":
-        return await executor.create_task(
-            user, run_id, title=str(action.args["title"]), due=action.args.get("due")
-        )
-    if action.name == "complete_task":
-        return await executor.complete_task(user, run_id, task_id=str(action.args["id"]))
-    if action.name == "list_tasks":
-        return await executor.list_tasks(user, run_id)
-    raise ValueError(f"unknown backend tool: {action.name}")
-
-
-def _entity_change_for(tool_name: str, result: object) -> dict[str, str] | None:
-    """Mutating tools announce what changed so clients can reconcile caches."""
-    if not isinstance(result, dict):
-        return None
-    if tool_name == "create_task":
-        kind = "CREATED"
-    elif tool_name == "complete_task":
-        kind = "UPDATED"
-    else:
-        return None
-    return {"typename": "Task", "id": str(result["id"]), "kind": kind, "scope": SCOPE_TASKS}

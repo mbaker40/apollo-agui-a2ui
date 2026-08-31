@@ -4,5 +4,10 @@ query Tasks {
     title
     due
     completed
+    priority
+    tags {
+      id
+      name
+    }
   }
 }

@@ -6,7 +6,7 @@ data: {"type":"TOOL_CALL_ARGS","toolCallId":"run_rec_3_call_1","delta":"{}"}
 
 data: {"type":"TOOL_CALL_END","toolCallId":"run_rec_3_call_1"}
 
-data: {"type":"TOOL_CALL_RESULT","messageId":"run_rec_3_msg_3","toolCallId":"run_rec_3_call_1","content":"[{\"id\": \"task_0001\", \"title\": \"buy milk\", \"due\": null, \"completed\": true, \"createdAt\": \"2026-08-29T04:43:40.400Z\"}]","role":"tool"}
+data: {"type":"TOOL_CALL_RESULT","messageId":"run_rec_3_msg_3","toolCallId":"run_rec_3_call_1","content":"[{\"id\": \"task_0001\", \"title\": \"buy milk\", \"due\": null, \"completed\": true, \"priority\": \"MEDIUM\", \"createdAt\": \"2026-08-29T06:17:26.401Z\", \"tags\": []}]","role":"tool"}
 
 data: {"type":"TOOL_CALL_START","toolCallId":"run_rec_3_call_4","toolCallName":"open_task","parentMessageId":"run_rec_3_msg_5"}
 

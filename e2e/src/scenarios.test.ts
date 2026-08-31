@@ -18,7 +18,19 @@ import {
   type AgUiEvent,
 } from './helpers.js';
 
-describe('scenario 0: auth gate', () => {
+// Vitest's file order is not guaranteed — each scenario file resets the world
+// first and captures entity ids from events (the executor never reuses ids).
+let milkId = '';
+
+describe('scenario 0: auth gate (and a clean slate)', () => {
+  it('resets the demo world', async () => {
+    const events = await runAgentOverHttp({
+      runId: 'run_e2e_reset',
+      messages: [userMessage('start over')],
+    });
+    expect(fullText(events)).toContain('Fresh start');
+  });
+
   it('rejects an agent run without a bearer token', async () => {
     await expect(
       runAgentOverHttp({ runId: 'run_e2e_noauth', messages: [userMessage('hi')], token: null }),
@@ -43,21 +55,22 @@ describe('scenario 1: backend write through the executor path', () => {
     expect(eventTypes(events)[0]).toBe('RUN_STARTED');
     expect(eventTypes(events).at(-1)).toBe('RUN_FINISHED');
     expect(toolCallStarts(events).map((e) => e.toolCallName)).toEqual(['create_task']);
-    expect(customEvents(events)).toEqual([
-      {
-        type: 'CUSTOM',
-        name: 'entity_changed',
-        value: { typename: 'Task', id: 'task_0001', kind: 'CREATED', scope: 'tasks' },
-      },
-    ]);
-    expect(fullText(events)).toBe('Created "buy milk" (task_0001). Anything else?');
+    const customs = customEvents(events);
+    expect(customs).toHaveLength(1);
+    milkId = customs[0]!.value.id;
+    expect(customs[0]).toEqual({
+      type: 'CUSTOM',
+      name: 'entity_changed',
+      value: { typename: 'Task', id: milkId, kind: 'CREATED', scope: 'tasks' },
+    });
+    expect(fullText(events)).toBe(`Created "buy milk" (${milkId}). Anything else?`);
 
     // The write is visible through the GraphQL facade (which reads via the executor).
     const tasks = await gql<{ tasks: { id: string; title: string; completed: boolean }[] }>(
       '{ tasks { id title completed } }',
     );
     expect(tasks.errors).toBeUndefined();
-    expect(tasks.data?.tasks).toEqual([{ id: 'task_0001', title: 'buy milk', completed: false }]);
+    expect(tasks.data?.tasks).toEqual([{ id: milkId, title: 'buy milk', completed: false }]);
 
     // The audit log attributes the write to the verified user AND the AG-UI run.
     const audit = await auditEntries('run_e2e_1');
@@ -69,7 +82,7 @@ describe('scenario 1: backend write through the executor path', () => {
       userEmail: 'demo@example.com',
       runId: 'run_e2e_1',
       tool: 'create_task',
-      entityId: 'task_0001',
+      entityId: milkId,
       status: 201,
     });
   });
@@ -90,7 +103,7 @@ describe('scenario 2: read-then-write', () => {
       {
         type: 'CUSTOM',
         name: 'entity_changed',
-        value: { typename: 'Task', id: 'task_0001', kind: 'UPDATED', scope: 'tasks' },
+        value: { typename: 'Task', id: milkId, kind: 'UPDATED', scope: 'tasks' },
       },
     ]);
     expect(fullText(events)).toBe('Nice — marked "buy milk" as done.');
@@ -98,7 +111,7 @@ describe('scenario 2: read-then-write', () => {
     const tasks = await gql<{ tasks: { id: string; completed: boolean }[] }>(
       '{ tasks { id completed } }',
     );
-    expect(tasks.data?.tasks).toEqual([{ id: 'task_0001', completed: true }]);
+    expect(tasks.data?.tasks).toEqual([{ id: milkId, completed: true }]);
 
     const audit = await auditEntries('run_e2e_2');
     expect(audit.map((e) => e.tool)).toEqual(['list_tasks', 'complete_task']);
@@ -127,7 +140,7 @@ describe('scenario 3: hybrid frontend tool', () => {
     // open_task locally, and continue the run with the tool result appended.
     const continuation = await runAgentOverHttp({
       runId: 'run_e2e_4',
-      messages: continuationMessages(events, { status: 'opened', id: 'task_0001' }),
+      messages: continuationMessages(events, { status: 'opened', id: milkId }),
       tools: [OPEN_TASK_TOOL],
     });
     expect(fullText(continuation)).toBe('Opened "buy milk" for you.');

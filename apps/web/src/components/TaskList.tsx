@@ -1,6 +1,6 @@
 import { useQuery } from '@apollo/client/react';
 import { useEffect, useRef } from 'react';
-import { TASKS_QUERY } from '../graphql/queries';
+import { TAGS_QUERY, TASKS_QUERY } from '../graphql/queries';
 
 export function TaskList({ selectedTaskId }: { selectedTaskId: string | null }) {
   // refetchOn opts this watched query into entityChanged refetch events; the
@@ -40,10 +40,42 @@ export function TaskList({ selectedTaskId }: { selectedTaskId: string | null }) 
               {task.completed ? '✓' : '○'}
             </span>
             <span className="title">{task.title}</span>
+            {task.priority !== 'MEDIUM' && (
+              <span className={`badge priority-${task.priority.toLowerCase()}`}>
+                {task.priority.toLowerCase()}
+              </span>
+            )}
+            {task.due && <span className="badge due">due {task.due}</span>}
+            {task.tags.map((tag) => (
+              <span key={tag.id} className="badge tag">
+                #{tag.name}
+              </span>
+            ))}
             <span className="muted id">{task.id}</span>
           </li>
         ))}
       </ul>
+      <TagsStrip />
     </section>
+  );
+}
+
+/** Second reconciliation scope made visible: Tag CREATED/DELETED events
+ * refetch this watched query via the Tag → ['tags'] registry entry. */
+export function TagsStrip() {
+  const { data } = useQuery(TAGS_QUERY, {
+    refetchOn: { entityChanged: true },
+  });
+  const tags = data?.tags ?? [];
+  if (tags.length === 0) return null;
+  return (
+    <footer className="tags-strip" aria-label="Tags">
+      <span className="muted">tags:</span>
+      {tags.map((tag) => (
+        <span key={tag.id} className="badge tag" data-testid={`tag-${tag.id}`}>
+          #{tag.name}
+        </span>
+      ))}
+    </footer>
   );
 }

@@ -9,4 +9,5 @@ packages/chat-core-swift/
 apps/android/
 apps/ios/
 contracts/fixtures/transcripts/
+services/graphql/schema.graphqls
 *.gradle*

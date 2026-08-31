@@ -210,6 +210,34 @@ h2 {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem;
 }
+.badge {
+  font-size: 0.7rem;
+  border-radius: 999px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.priority-high {
+  color: var(--err);
+  border-color: var(--err);
+}
+.badge.priority-low {
+  opacity: 0.7;
+}
+.badge.tag {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: transparent;
+}
+.tags-strip {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
 .empty {
   padding: 16px;
 }

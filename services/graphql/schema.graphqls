@@ -1,12 +1,31 @@
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+type Tag {
+  id: ID!
+  name: String!
+}
+
 type Task {
   id: ID!
   title: String!
   due: String
   completed: Boolean!
+  priority: Priority!
+  tags: [Tag!]!
+}
+
+type ResetResult {
+  deletedTaskIds: [ID!]!
+  deletedTagIds: [ID!]!
 }
 
 type Query {
   tasks: [Task!]!
+  tags: [Tag!]!
 }
 
 """
@@ -17,4 +36,22 @@ directly; clients reconcile via AG-UI entity_changed events.
 type Mutation {
   createTask(title: String!, due: String): Task!
   completeTask(id: ID!): Task!
+  renameTask(id: ID!, title: String!): Task!
+  setDue(id: ID!, due: String): Task!
+  setPriority(id: ID!, priority: Priority!): Task!
+  reopenTask(id: ID!): Task!
+
+  """Returns the deleted task."""
+  deleteTask(id: ID!): Task!
+  duplicateTask(id: ID!): Task!
+
+  """Returns the tasks that were removed."""
+  clearCompleted: [Task!]!
+  createTag(name: String!): Tag!
+
+  """
+  Attaches a tag by name, creating it if needed; returns the updated task.
+  """
+  tagTask(id: ID!, name: String!): Task!
+  resetDemo: ResetResult!
 }

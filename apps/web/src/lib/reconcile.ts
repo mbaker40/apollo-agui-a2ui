@@ -26,9 +26,11 @@ declare module '@apollo/client' {
   }
 }
 
-/** typename → root Query list fields that must refresh when one is CREATED. */
+/** typename → root Query list fields that must refresh when one is CREATED.
+ * Growing the domain = one line here per typename (docs/SCALING.md). */
 export const LIST_FIELDS_BY_TYPENAME: Record<string, readonly string[]> = {
   Task: ['tasks'],
+  Tag: ['tags'],
 };
 
 const invalidateField: Modifier<unknown> = (_value, { INVALIDATE }) => INVALIDATE;

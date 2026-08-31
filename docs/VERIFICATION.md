@@ -1,5 +1,12 @@
 # Verification record
 
+> **v2 addendum (same session, later):** after the ten-mutation scaling
+> experiment ([SCALING.md](SCALING.md)) the in-session totals are:
+> contracts 7, executor 23, graphql 6, agent 40 (pytest), web 11, Kotlin 20
+> (all replaying the 9 recorded transcripts), e2e 19 — `make check` green.
+> Swift gained mirrored v2 transcript tests (still verify-locally).
+> Live v2 drive: `screenshots/web-v2-mutations.png`.
+
 Captured in the authoring session (2026-08-29, Linux container, no secrets).
 Everything below is reproducible with the listed commands; the two exceptions
 (Swift, Docker image builds) are explained under **Network constraints**.

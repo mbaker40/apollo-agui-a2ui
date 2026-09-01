@@ -489,7 +489,55 @@ Anthropic API key (password field), model picker. Persisted in
 localStorage under keys `composerx.rendererUrl`, `composerx.apiKey`,
 `composerx.model`, `composerx.theme`.
 
-## 8. LLM chat contract (agent C's milestone; B stubs the seam)
+### 7b. Mobile layout + touch (breakpoint ≤ 900px)
+
+Audit findings that drove this (phone viewport 390×844): canvas and iframe
+collapse to **0px** (fixed 250px + 330px side panels), 190px horizontal
+page scroll, several tap targets < 44px, sub-16px inputs (iOS
+zoom-on-focus), `100vh` under the URL bar, and HTML5 drag events never
+fire from touch (glossary + tree drags dead; the canvas-move gesture is
+pointer-based and survives).
+
+- **Single-column app** under the breakpoint: the canvas fills the screen;
+  a fixed **bottom tab bar** switches views — `Canvas · Add · Design ·
+Chat` (testids `mtab-canvas` etc.), ≥ 48px tall rows, padded by
+  `env(safe-area-inset-bottom)`. Glossary becomes the Add view; the right
+  sidebar's Design/Chat become their own views; the bottom drawer stays
+  reachable from the Canvas view (its toggle; default **closed** on
+  mobile). The desktop ≥ 900px layout is unchanged. CRITICAL: the
+  renderer iframe must stay **mounted** across view switches (hide the
+  canvas view with CSS, never unmount — remounting reboots the renderer
+  and replays the handshake).
+- **Sizing hygiene** (applies globally, hurts nothing on desktop): app
+  height `100dvh` with a `100vh` fallback; every text/number/password
+  input and textarea ≥ 16px font on mobile; interactive controls ≥ 44px
+  hit area under the breakpoint (visual size may stay smaller via
+  padding); no horizontal page scroll ever (assert
+  `document.documentElement.scrollWidth <= clientWidth`); toolbar
+  compacts (smaller labels / horizontal scroll within the toolbar strip,
+  never page overflow).
+- **Touch insertion, two tiers**: (1) **tap a glossary tile** = insert
+  into the current insert target, auto-switch to the Canvas view, and
+  show a brief toast naming what landed where (`mtoast` testid;
+  auto-dismiss ~2.5s). (2) **Positional touch drag** via a per-tile
+  **drag grip** (`glossary-grip-<Name>`, a ≥ 44px handle with
+  `touch-action: none` — the tile body keeps `pan-y` so the list still
+  scrolls): pointerdown on the grip starts a pointer-based drag
+  immediately (no long-press) — a floating tile ghost follows the
+  pointer, the app auto-switches to the Canvas view when the pointer
+  crosses into it, converts coordinates and drives the SAME
+  `sendDndHover`/`sendDndEnd` + held `COMPOSERX_DND_TARGET` path as the
+  desktop overlay (the catalog side needs no changes), and pointerup
+  inserts at the resolved target (structural fallback rules unchanged).
+  HTML5 drag stays as-is for desktop; the pointer path is additive and
+  must also work with a mouse under the breakpoint.
+- **Tree** on mobile: tap-select only (HTML5 row drag remains
+  desktop-only; document it). **Canvas move** (§4e) already rides pointer
+  events on the veil — it must keep working under touch emulation
+  (verified in the wave e2e), giving mobile its move gesture.
+- Settings modal renders full-screen under the breakpoint. Tooltips
+  (`title`) don't exist on touch — the toast + visible hint text carry
+  the affordances instead.
 
 ```ts
 interface LlmClient {

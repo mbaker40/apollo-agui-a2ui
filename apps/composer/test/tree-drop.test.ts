@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { DocComponent, SurfaceDoc } from '../src/lib/surface-doc';
-import { CATALOG_ID, ROOT_ID, SURFACE_ID, moveComponent } from '../src/lib/surface-doc';
+import {
+  CATALOG_ID,
+  ROOT_ID,
+  SURFACE_ID,
+  moveComponent,
+  moveComponents,
+} from '../src/lib/surface-doc';
 import {
   dropTargetForPointer,
+  groupMoveIndexFor,
   moveIndexFor,
   resolveTreeDrop,
   zoneForPointer,
@@ -206,5 +213,70 @@ describe('moveIndexFor (after-removal rule for move drops)', () => {
     expect(moveIndexFor(doc, 'a', into)).toBe(3);
     const moved = moveComponent(doc, 'a', ROOT_ID, 3);
     expect(moved.components[0]!.children).toEqual(['card', 'b', 'c', 'a']);
+  });
+});
+
+describe('groupMoveIndexFor (after-ALL-removals rule for group drops)', () => {
+  /** root Column → [a, b, c, d] (four Text leaves). */
+  function fourDoc(): SurfaceDoc {
+    return docWith([
+      { id: ROOT_ID, component: 'Column', children: ['a', 'b', 'c', 'd'] },
+      { id: 'a', component: 'Text', text: 'a' },
+      { id: 'b', component: 'Text', text: 'b' },
+      { id: 'c', component: 'Text', text: 'c' },
+      { id: 'd', component: 'Text', text: 'd' },
+    ]);
+  }
+
+  it('subtracts EVERY moved id above the target in the same container, not just one', () => {
+    const doc = fourDoc();
+    // moving [a, b] to after 'd': the tree resolves raw index 4; BOTH moved
+    // ids sit above it, so the after-removal container is [c, d] → index 2.
+    const target = resolveTreeDrop(doc, 'd', 'after')!;
+    expect(target.index).toBe(4);
+    expect(groupMoveIndexFor(doc, ['a', 'b'], target)).toBe(2);
+    // and the adjusted index gives the intended order end-to-end
+    const moved = moveComponents(doc, ['a', 'b'], ROOT_ID, 2).doc;
+    expect(moved.components[0]!.children).toEqual(['c', 'd', 'a', 'b']);
+  });
+
+  it('counts only the moved ids ABOVE the target position', () => {
+    const doc = fourDoc();
+    // moving [a, c] to before 'b' (raw index 1): only 'a' sits above → 0.
+    const target = resolveTreeDrop(doc, 'b', 'before')!;
+    expect(target.index).toBe(1);
+    expect(groupMoveIndexFor(doc, ['a', 'c'], target)).toBe(0);
+    const moved = moveComponents(doc, ['a', 'c'], ROOT_ID, 0).doc;
+    expect(moved.components[0]!.children).toEqual(['a', 'c', 'b', 'd']);
+  });
+
+  it('passes through for cross-container groups and ids not in the target children', () => {
+    const doc = treeDoc(); // root [card, a, b, c]; body [inner]
+    const after = resolveTreeDrop(doc, 'a', 'after')!; // root, raw index 2
+    expect(groupMoveIndexFor(doc, ['inner'], after)).toBe(2); // other container
+    expect(groupMoveIndexFor(doc, ['ghost', 'body'], after)).toBe(2); // not listed anywhere here
+    expect(groupMoveIndexFor(doc, [], after)).toBe(2); // defensive: empty group
+  });
+
+  it('counts duplicate occurrences (moveComponents splices them all out)', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['x', 'a', 'x', 'b'] },
+      { id: 'x', component: 'Text', text: 'x' },
+      { id: 'a', component: 'Text', text: 'a' },
+      { id: 'b', component: 'Text', text: 'b' },
+    ]);
+    // before 'b' is raw index 3 — both 'x' occurrences above it vanish → 1.
+    const target = resolveTreeDrop(doc, 'b', 'before')!;
+    expect(target.index).toBe(3);
+    expect(groupMoveIndexFor(doc, ['x'], target)).toBe(1);
+    const moved = moveComponents(doc, ['x'], ROOT_ID, 1).doc;
+    expect(moved.components[0]!.children).toEqual(['a', 'x', 'b']);
+  });
+
+  it('moveIndexFor is the single-id view of groupMoveIndexFor', () => {
+    const doc = treeDoc();
+    const target = resolveTreeDrop(doc, 'c', 'after')!;
+    expect(moveIndexFor(doc, 'a', target)).toBe(groupMoveIndexFor(doc, ['a'], target));
+    expect(moveIndexFor(doc, 'inner', target)).toBe(groupMoveIndexFor(doc, ['inner'], target));
   });
 });

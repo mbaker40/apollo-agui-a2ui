@@ -102,14 +102,37 @@ export function dropTargetForPointer(
 
 /**
  * Converts a resolved tree index (a position in the container's CURRENT
+ * children) into the after-ALL-removals index moveComponents expects
+ * (contract §5 group move): every occurrence of a moved id sitting in the
+ * TARGET container's children ABOVE the target position vanishes on removal,
+ * shifting everything after it up by one — so the raw index drops by that
+ * count. Moved ids below the target, in other containers, or not in any
+ * children array contribute nothing.
+ */
+export function groupMoveIndexFor(
+  doc: SurfaceDoc,
+  movedIds: readonly string[],
+  target: TreeDropTarget,
+): number {
+  const container = doc.components.find((c) => c.id === target.containerId);
+  const children = Array.isArray(container?.children) ? container.children : [];
+  const moved = new Set(movedIds);
+  let removedAbove = 0;
+  const limit = Math.min(target.index, children.length);
+  for (let i = 0; i < limit; i++) {
+    if (moved.has(children[i])) removedAbove++;
+  }
+  return target.index - removedAbove;
+}
+
+/**
+ * Converts a resolved tree index (a position in the container's CURRENT
  * children) into the after-removal index moveComponent expects (contract §5):
  * when the moved id currently sits in the same container ABOVE the target
  * position, its removal shifts everything after it up by one. Cross-container
  * moves and same-container moves below the target pass through unchanged.
+ * The single-id view of groupMoveIndexFor.
  */
 export function moveIndexFor(doc: SurfaceDoc, movedId: string, target: TreeDropTarget): number {
-  const container = doc.components.find((c) => c.id === target.containerId);
-  const children = Array.isArray(container?.children) ? container.children : [];
-  const current = children.indexOf(movedId);
-  return current >= 0 && current < target.index ? target.index - 1 : target.index;
+  return groupMoveIndexFor(doc, [movedId], target);
 }

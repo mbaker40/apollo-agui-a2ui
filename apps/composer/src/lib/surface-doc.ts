@@ -546,17 +546,12 @@ export function removeComponent(doc: SurfaceDoc, id: string): SurfaceDoc {
 export type MoveVerdict = { ok: true } | { ok: false; reason: string };
 
 /**
- * The shared validity checks behind canMoveTo and moveComponent (contract §5).
- * Returns a human-readable refusal reason, or null when the move is legal.
+ * The target-container half of the §5 move checks, shared by the single and
+ * group move ops: `containerId` must name a children-array container
+ * (Row/Column/List) whose `children`, when present, is an array. Returns a
+ * human-readable refusal reason, or null when the target is legal.
  */
-function moveRefusalReason(doc: SurfaceDoc, id: string, containerId: string): string | null {
-  if (id === ROOT_ID) {
-    return `cannot move "${ROOT_ID}" — the surface root cannot be re-homed`;
-  }
-  const moved = doc.components.find((c) => c.id === id);
-  if (!moved) {
-    return `component "${id}" does not exist in the document`;
-  }
+function moveTargetRefusalReason(doc: SurfaceDoc, containerId: string): string | null {
   const container = doc.components.find((c) => c.id === containerId);
   if (!container) {
     return `move target "${containerId}" does not exist in the document`;
@@ -569,6 +564,25 @@ function moveRefusalReason(doc: SurfaceDoc, id: string, containerId: string): st
   }
   if (container.children !== undefined && !Array.isArray(container.children)) {
     return `move target "${containerId}" has a non-array "children" property`;
+  }
+  return null;
+}
+
+/**
+ * The shared validity checks behind canMoveTo and moveComponent (contract §5).
+ * Returns a human-readable refusal reason, or null when the move is legal.
+ */
+function moveRefusalReason(doc: SurfaceDoc, id: string, containerId: string): string | null {
+  if (id === ROOT_ID) {
+    return `cannot move "${ROOT_ID}" — the surface root cannot be re-homed`;
+  }
+  const moved = doc.components.find((c) => c.id === id);
+  if (!moved) {
+    return `component "${id}" does not exist in the document`;
+  }
+  const targetReason = moveTargetRefusalReason(doc, containerId);
+  if (targetReason !== null) {
+    return targetReason;
   }
   const slotParent = singleSlotParentOf(doc, id);
   if (slotParent !== null) {
@@ -742,6 +756,141 @@ export function partitionForDelete(doc: SurfaceDoc, ids: string[]): DeletePartit
     }
   }
   return { deletable, subsumed, skipped };
+}
+
+export interface GroupMovePartition {
+  /** Ids moveComponents will re-home, deduped, in document (flat-list) order. */
+  movable: string[];
+  /** Ids carried by a selected proper ancestor — they travel inside its subtree. */
+  subsumed: string[];
+  /** Ids that stay put and get reported: root, and single-slot occupants (§5). */
+  skipped: string[];
+}
+
+/**
+ * Splits a selection into what a group move (contract §4e/§5) actually
+ * re-homes. The membership rules are exactly partitionForDelete's — ids under
+ * a selected proper ancestor are subsumed (the ancestor's subtree carries
+ * them), root and single-slot occupants are skipped, stale ids vanish — but
+ * the movable remainder is deduped and kept in DOCUMENT order (the flat-list
+ * order of doc.components), which is the order the contiguous run inserts in.
+ * Pure; the doc is never touched.
+ */
+export function partitionForMove(doc: SurfaceDoc, ids: string[]): GroupMovePartition {
+  const { deletable, subsumed, skipped } = partitionForDelete(doc, ids);
+  const order = new Map<string, number>();
+  doc.components.forEach((c, i) => {
+    if (!order.has(c.id)) order.set(c.id, i);
+  });
+  const movable = [...new Set(deletable)].sort(
+    (a, b) => (order.get(a) ?? doc.components.length) - (order.get(b) ?? doc.components.length),
+  );
+  return { movable, subsumed, skipped };
+}
+
+/**
+ * The shared validity checks behind canMoveGroupTo and moveComponents
+ * (contract §5): the effective (movable) set must be non-empty, the target
+ * must pass the same container checks as the single move, and it may not be
+ * any moved id or sit inside ANY moved subtree. Per-member unmovability
+ * (root, single-slot occupants) is not a refusal here — those members are
+ * partitioned into `skipped` instead.
+ */
+function groupMoveRefusalReason(
+  doc: SurfaceDoc,
+  movable: string[],
+  containerId: string,
+): string | null {
+  if (movable.length === 0) {
+    return 'nothing movable in the group — root and single-slot occupants stay put';
+  }
+  const targetReason = moveTargetRefusalReason(doc, containerId);
+  if (targetReason !== null) {
+    return targetReason;
+  }
+  for (const id of movable) {
+    if (containerId === id) {
+      return `cannot move "${id}" into itself`;
+    }
+    if (reachableFrom(doc.components, id).has(containerId)) {
+      return `cannot move "${id}" into its own subtree ("${containerId}" is inside it)`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether the group `ids` may be re-homed into `containerId` (contract §5):
+ * the same checks as moveComponents, exposed as a verdict so drag surfaces
+ * can render no-drop affordances instead of try/catching. An empty effective
+ * set (stale ids, or only root/single-slot members) is `{ok: false}` here,
+ * not a throw.
+ */
+export function canMoveGroupTo(doc: SurfaceDoc, ids: string[], containerId: string): MoveVerdict {
+  const { movable } = partitionForMove(doc, ids);
+  const reason = groupMoveRefusalReason(doc, movable, containerId);
+  return reason === null ? { ok: true } : { ok: false, reason };
+}
+
+export interface GroupMoveResult {
+  doc: SurfaceDoc;
+  /** The effective set actually re-homed, in document order. */
+  moved: string[];
+  /** Selected members left in place (root, single-slot occupants) — callers toast these. */
+  skipped: string[];
+}
+
+/**
+ * Re-homes a whole selection (contract §5 group move op): the plural of
+ * moveComponent with the same target rules. The effective set is `ids`
+ * filtered to the doc, subsumption-reduced (a selected proper ancestor
+ * carries its descendants), minus the unmovable members (root, single-slot
+ * occupants) which come back as `skipped`; the remainder travels in DOCUMENT
+ * order. Every effective id is spliced out of every `children` array first,
+ * then the run is inserted contiguously into `containerId`'s `children` at
+ * `index` — interpreted AFTER every removal (out-of-range indices clamp;
+ * non-finite indices land at the end). No id remapping, `dataModel`
+ * untouched. Throws exactly when canMoveGroupTo refuses: an empty effective
+ * set, an unknown / non-container target, or a target equal to or inside ANY
+ * moved subtree. Pure: never mutates the input.
+ */
+export function moveComponents(
+  doc: SurfaceDoc,
+  ids: string[],
+  containerId: string,
+  index: number,
+): GroupMoveResult {
+  const { movable, skipped } = partitionForMove(doc, ids);
+  const reason = groupMoveRefusalReason(doc, movable, containerId);
+  if (reason !== null) {
+    throw new Error(reason);
+  }
+
+  // Removal first: the index is defined against the container's children
+  // AFTER every moved id disappears from wherever it currently sits.
+  const movedSet = new Set(movable);
+  const spliced = doc.components.map((c) => {
+    if (!Array.isArray(c.children) || !c.children.some((childId) => movedSet.has(childId))) {
+      return c;
+    }
+    return {
+      ...c,
+      children: c.children.filter((childId) => !movedSet.has(childId)),
+    } as DocComponent;
+  });
+
+  const container = spliced.find((c) => c.id === containerId);
+  const existingChildren = container?.children;
+  const children: unknown[] = Array.isArray(existingChildren) ? [...existingChildren] : [];
+  const at = Number.isFinite(index)
+    ? Math.max(0, Math.min(children.length, Math.trunc(index)))
+    : children.length;
+  children.splice(at, 0, ...movable);
+
+  const components = spliced.map((c) =>
+    c.id === containerId ? ({ ...c, children } as DocComponent) : c,
+  );
+  return { doc: { ...doc, components }, moved: movable, skipped };
 }
 
 /**

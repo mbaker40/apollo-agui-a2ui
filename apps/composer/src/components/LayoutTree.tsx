@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { TreeNode } from '../lib/surface-doc';
-import { ROOT_ID, canMoveTo, componentTree } from '../lib/surface-doc';
+import {
+  ROOT_ID,
+  canMoveGroupTo,
+  canMoveTo,
+  componentTree,
+  partitionForMove,
+} from '../lib/surface-doc';
 import type { TreeDropZone } from '../lib/tree-drop';
-import { dropTargetForPointer, moveIndexFor } from '../lib/tree-drop';
+import { dropTargetForPointer, groupMoveIndexFor, moveIndexFor } from '../lib/tree-drop';
 import { useComposerState, useStore } from '../state/context';
 import { DRAG_MIME } from './Glossary';
 
@@ -115,6 +121,13 @@ function TreeRow({ node, depth, dnd }: { node: TreeNode; depth: number; dnd: Tre
  * from canMoveTo — invalid targets render no-drop and refuse the drop. Drops
  * apply moveComponentTo (after-removal index via moveIndexFor) or a
  * positioned insertComponent; each applied drop is one undo step.
+ *
+ * Group drag (contract §4e/§4f): dragging a row that is a MEMBER of the
+ * multi-selection lifts the whole selection — validity comes from
+ * canMoveGroupTo, the pre-removal index is adjusted for EVERY moved id above
+ * the target in the same container (groupMoveIndexFor), and the drop applies
+ * moveComponentsTo (one undo step, skipped members toasted). Dragging a
+ * non-member collapses the selection to that row and single-moves it.
  */
 export function LayoutTree() {
   const store = useStore();
@@ -125,9 +138,15 @@ export function LayoutTree() {
   // until drop). Cross-window move drags have the type but no local id and
   // therefore never validate.
   const draggedIdRef = useRef<string | null>(null);
+  // Group drag (§4e/§4f): when the dragged row is a MEMBER of the current
+  // multi-selection, the whole selection lifts — this holds it, captured at
+  // dragstart so mid-drag selection races cannot change what is moving.
+  // null = single-row drag.
+  const draggedIdsRef = useRef<string[] | null>(null);
 
   const clearDrag = () => {
     draggedIdRef.current = null;
+    draggedIdsRef.current = null;
     setIndicator(null);
   };
 
@@ -137,9 +156,18 @@ export function LayoutTree() {
       e.dataTransfer.setData(MOVE_MIME, node.id);
       e.dataTransfer.effectAllowed = 'move';
       draggedIdRef.current = node.id;
+      const selection = store.getState().selectedComponentIds;
+      if (selection.length >= 2 && selection.includes(node.id)) {
+        // §4e group move: dragging a MEMBER of the multi-selection lifts the
+        // whole selection — it stays exactly the group (no collapse).
+        draggedIdsRef.current = [...selection];
+        return;
+      }
+      draggedIdsRef.current = null;
       // Mirror the canvas move (§4e): lifting a component selects it —
-      // and, per §4f, a tree drag started with a multi-selection first
-      // COLLAPSES it to the dragged row (selectComponent replaces the list).
+      // and, per §4f, a tree drag started on a NON-member of a
+      // multi-selection COLLAPSES it to the dragged row (selectComponent
+      // replaces the list).
       store.actions.selectComponent(node.id);
     },
     onRowDragEnd() {
@@ -161,7 +189,11 @@ export function LayoutTree() {
       let valid = target !== null;
       if (valid && isMove && target) {
         const movedId = draggedIdRef.current;
-        valid = movedId !== null && canMoveTo(doc, movedId, target.containerId).ok;
+        const group = draggedIdsRef.current;
+        valid =
+          group !== null
+            ? canMoveGroupTo(doc, group, target.containerId).ok
+            : movedId !== null && canMoveTo(doc, movedId, target.containerId).ok;
       }
       if (valid) {
         e.preventDefault(); // accept the drop
@@ -184,10 +216,25 @@ export function LayoutTree() {
         e.currentTarget.getBoundingClientRect(),
         e.clientY,
       );
+      const group = draggedIdsRef.current;
       clearDrag();
       if (!target) return;
       const movedId = e.dataTransfer.getData(MOVE_MIME);
       if (movedId) {
+        if (group !== null && group.includes(movedId)) {
+          // Group drop (§4e): the tree resolves a PRE-removal index, so
+          // subtract every id the group move will actually splice out of the
+          // target container above that position (§5 after-all-removals
+          // semantics). moveComponentsTo is the same one-undo + skip-toast
+          // action the canvas MOVE_DROP-with-ids path applies.
+          const movable = partitionForMove(doc, group).movable;
+          store.actions.moveComponentsTo(
+            group,
+            target.containerId,
+            groupMoveIndexFor(doc, movable, target),
+          );
+          return;
+        }
         // Tree indices are positions in the CURRENT children array; convert
         // to the after-removal index moveComponent expects (§5).
         store.actions.moveComponentTo(

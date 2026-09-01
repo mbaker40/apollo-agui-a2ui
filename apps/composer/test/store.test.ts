@@ -464,6 +464,192 @@ describe('bridge MOVE_* flows (§4e)', () => {
   });
 });
 
+describe('group move (contract §4e group move)', () => {
+  // root Column [card(Card → cardBody Column [inner]), txt, txt2] — the same
+  // shape the group-delete tests use.
+  function groupDoc(): SurfaceDoc {
+    return {
+      surfaceId: SURFACE_ID,
+      catalogId: CATALOG_ID,
+      components: [
+        { id: 'root', component: 'Column', children: ['card', 'txt', 'txt2'] },
+        { id: 'card', component: 'Card', child: 'cardBody' },
+        { id: 'cardBody', component: 'Column', children: ['inner'] },
+        { id: 'inner', component: 'Text', text: 'inner' },
+        { id: 'txt', component: 'Text', text: 'a' },
+        { id: 'txt2', component: 'Text', text: 'b' },
+      ],
+      dataModel: {},
+    };
+  }
+  function rootChildren(store: ReturnType<typeof makeStore>['store']) {
+    return store.getState().doc.components.find((c) => c.id === 'root')!.children;
+  }
+  function bodyChildren(store: ReturnType<typeof makeStore>['store']) {
+    return store.getState().doc.components.find((c) => c.id === 'cardBody')!.children;
+  }
+
+  it('MOVE_START with ids preserves the multi-selection (no collapse, no re-send)', () => {
+    const { store, sentSelectionPayloads } = makeStore({ doc: groupDoc() });
+    store.actions.setSelection(['txt', 'txt2']);
+    const sends = sentSelectionPayloads.length;
+    store.actions.bridgeMoveStart({ id: 'txt', ids: ['txt', 'txt2'] });
+    expect(store.getState().selectedComponentIds).toEqual(['txt', 'txt2']);
+    expect(store.getState().selectedComponentId).toBe('txt');
+    expect(sentSelectionPayloads).toHaveLength(sends);
+    expect(store.getState().events.some((e) => e.summary.includes('lifting 2 components'))).toBe(
+      true,
+    );
+  });
+
+  it('MOVE_START without ids still collapses to the lifted id (single path untouched)', () => {
+    const { store } = makeStore({ doc: groupDoc() });
+    store.actions.setSelection(['txt', 'txt2']);
+    store.actions.bridgeMoveStart({ id: 'txt' });
+    expect(store.getState().selectedComponentIds).toEqual(['txt']);
+  });
+
+  it('MOVE_DROP with ids applies ONE undo snapshot + one re-render, keeps the group selected', () => {
+    const { store, sentRenders, sentSelectionPayloads } = makeStore({ doc: groupDoc() });
+    store.actions.setSelection(['txt2', 'txt']); // selection order ≠ document order
+    const sends = sentSelectionPayloads.length;
+    store.actions.bridgeMoveDrop({
+      id: 'txt2',
+      containerId: 'cardBody',
+      index: 1,
+      slot: 'after',
+      ids: ['txt2', 'txt'],
+    });
+    // contiguous run in DOCUMENT order [txt, txt2] at index 1 of [inner]
+    expect(bodyChildren(store)).toEqual(['inner', 'txt', 'txt2']);
+    expect(rootChildren(store)).toEqual(['card']);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(sentRenders).toHaveLength(1);
+    // the moved set stays selected, primary unchanged, nothing re-sent
+    expect(store.getState().selectedComponentIds).toEqual(['txt2', 'txt']);
+    expect(store.getState().selectedComponentId).toBe('txt2');
+    expect(sentSelectionPayloads).toHaveLength(sends);
+    store.actions.undo(); // ONE step restores everything
+    expect(rootChildren(store)).toEqual(['card', 'txt', 'txt2']);
+    expect(bodyChildren(store)).toEqual(['inner']);
+  });
+
+  it('toasts skipped members like group delete and leaves them in place (still selected)', () => {
+    const { store, sentRenders } = makeStore({ doc: groupDoc() });
+    store.actions.setSelection(['cardBody', 'txt']); // cardBody fills card's child slot
+    store.actions.bridgeMoveDrop({
+      id: 'txt',
+      containerId: 'root',
+      index: 2,
+      slot: 'after',
+      ids: ['cardBody', 'txt'],
+    });
+    expect(rootChildren(store)).toEqual(['card', 'txt2', 'txt']);
+    expect(store.getState().toast?.message).toBe('1 skipped — single-slot occupant (#cardBody)');
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(sentRenders).toHaveLength(1);
+    expect(store.getState().selectedComponentIds).toEqual(['cardBody', 'txt']);
+    expect(store.getState().doc.components.find((c) => c.id === 'card')!.child).toBe('cardBody');
+  });
+
+  it('refuses invalid group drops: doc + undo untouched, reason logged', () => {
+    const { store, sentRenders } = makeStore({ doc: groupDoc() });
+    const before = store.getState().doc;
+    // target inside a moved subtree
+    store.actions.bridgeMoveDrop({
+      id: 'card',
+      containerId: 'cardBody',
+      index: 0,
+      slot: 'into',
+      ids: ['card', 'txt'],
+    });
+    // empty effective set: only a single-slot occupant
+    store.actions.bridgeMoveDrop({
+      id: 'cardBody',
+      containerId: 'root',
+      index: 0,
+      slot: 'into',
+      ids: ['cardBody'],
+    });
+    // empty effective set: stale ids only
+    store.actions.bridgeMoveDrop({
+      id: 'ghost',
+      containerId: 'root',
+      index: 0,
+      slot: 'into',
+      ids: ['ghost', 'ghost2'],
+    });
+    expect(store.getState().doc).toBe(before);
+    expect(store.getState().undoStack).toHaveLength(0);
+    expect(sentRenders).toHaveLength(0);
+    const errors = store
+      .getState()
+      .events.filter((e) => e.kind === 'error' && /Group move refused/.test(e.summary));
+    expect(errors).toHaveLength(3);
+    expect(errors.some((e) => /own subtree/.test(e.summary))).toBe(true);
+    expect(errors.some((e) => /nothing movable/.test(e.summary))).toBe(true);
+  });
+
+  it('a same-position group drop is a no-op: no undo snapshot, no re-render', () => {
+    const { store, sentRenders } = makeStore({ doc: groupDoc() });
+    // txt/txt2 already sit at root[1..2]; dropping them back there changes nothing.
+    store.actions.bridgeMoveDrop({
+      id: 'txt',
+      containerId: 'root',
+      index: 1,
+      slot: 'after',
+      ids: ['txt', 'txt2'],
+    });
+    expect(rootChildren(store)).toEqual(['card', 'txt', 'txt2']);
+    expect(store.getState().undoStack).toHaveLength(0);
+    expect(sentRenders).toHaveLength(0);
+  });
+
+  it('MOVE_DROP with empty ids falls back to the single-move path', () => {
+    const { store } = makeStore({ doc: groupDoc() });
+    store.actions.bridgeMoveDrop({
+      id: 'txt',
+      containerId: 'root',
+      index: 2,
+      slot: 'after',
+      ids: [],
+    });
+    expect(rootChildren(store)).toEqual(['card', 'txt2', 'txt']);
+    expect(store.getState().undoStack).toHaveLength(1);
+  });
+
+  it('ignores group MOVE_* messages in preview mode too', () => {
+    const { store, sentRenders } = makeStore({ doc: groupDoc() });
+    store.actions.setSelection(['txt', 'txt2']);
+    store.actions.setMode('preview');
+    const before = store.getState().doc;
+    store.actions.bridgeMoveStart({ id: 'txt', ids: ['txt', 'txt2'] });
+    store.actions.bridgeMoveDrop({
+      id: 'txt',
+      containerId: 'cardBody',
+      index: 1,
+      slot: 'into',
+      ids: ['txt', 'txt2'],
+    });
+    expect(store.getState().doc).toBe(before);
+    expect(sentRenders).toHaveLength(0);
+    expect(store.getState().selectedComponentIds).toEqual(['txt', 'txt2']);
+  });
+
+  it('moveComponentsTo is directly callable (tree path) with the same semantics', () => {
+    const { store, sentRenders } = makeStore({ doc: groupDoc() });
+    const result = store.actions.moveComponentsTo(['txt2', 'txt'], 'cardBody', 0);
+    expect(result.ok).toBe(true);
+    expect(bodyChildren(store)).toEqual(['txt', 'txt2', 'inner']);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(sentRenders).toHaveLength(1);
+    const refused = store.actions.moveComponentsTo(['ghost'], 'root', 0);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error).toMatch(/nothing movable/);
+    expect(store.getState().undoStack).toHaveLength(1); // unchanged
+  });
+});
+
 describe('sidecar v2 payloads', () => {
   it('parses SIDECAR_READY features (v2 and v1)', () => {
     const { store } = makeStore();

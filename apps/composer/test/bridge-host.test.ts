@@ -420,6 +420,28 @@ describe('BridgeHost MOVE_* routing (§4e)', () => {
     expect(h.callbacks.onMoveDrop).toHaveBeenCalledTimes(2);
   });
 
+  it('passes the optional group-move ids through MOVE_START and MOVE_DROP (§4e group move)', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.dispatch(COMPOSERX_MOVE_START, { id: 'a', ids: ['a', 'b'] });
+    h.dispatch(COMPOSERX_MOVE_DROP, {
+      id: 'a',
+      containerId: 'root',
+      index: 1,
+      slot: 'after',
+      ids: ['a', 'b'],
+    });
+    expect(h.callbacks.onMoveStart).toHaveBeenCalledWith({ id: 'a', ids: ['a', 'b'] });
+    expect(h.callbacks.onMoveDrop).toHaveBeenCalledWith({
+      id: 'a',
+      containerId: 'root',
+      index: 1,
+      slot: 'after',
+      ids: ['a', 'b'],
+    });
+    expect(h.callbacks.onUnknown).not.toHaveBeenCalled();
+  });
+
   it('drops malformed MOVE_* payloads without invoking callbacks (or onUnknown)', () => {
     const h = makeHarness();
     h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
@@ -555,6 +577,36 @@ describe('parseMoveIdPayload / parseMoveDropPayload', () => {
       parseMoveDropPayload({ id: 'x', containerId: 'y', index: Infinity, slot: 'into' }),
     ).toBeNull();
     expect(parseMoveDropPayload({ id: 'x', containerId: 'y', index: 0, slot: null })).toBeNull();
+  });
+
+  it('accepts the optional group-move ids, filtering malformed entries defensively (§4e)', () => {
+    expect(parseMoveIdPayload({ id: 'x', ids: ['a', 'b'] })).toEqual({ id: 'x', ids: ['a', 'b'] });
+    expect(parseMoveIdPayload({ id: 'x', ids: ['a', 5, '', null, 'b'] })).toEqual({
+      id: 'x',
+      ids: ['a', 'b'],
+    });
+    expect(
+      parseMoveDropPayload({ id: 'x', containerId: 'y', index: 0, slot: 'into', ids: ['x', 'z'] }),
+    ).toEqual({ id: 'x', containerId: 'y', index: 0, slot: 'into', ids: ['x', 'z'] });
+    // an all-malformed array passes through empty — the store's length gate
+    // downgrades it to a single move of `id`
+    expect(
+      parseMoveDropPayload({ id: 'x', containerId: 'y', index: 0, slot: 'into', ids: [7] }),
+    ).toEqual({ id: 'x', containerId: 'y', index: 0, slot: 'into', ids: [] });
+  });
+
+  it('drops a non-array ids entirely (single-move semantics preserved)', () => {
+    expect(parseMoveIdPayload({ id: 'x', ids: 'a' })?.ids).toBeUndefined();
+    expect(parseMoveIdPayload({ id: 'x', ids: null })?.ids).toBeUndefined();
+    expect(parseMoveIdPayload({ id: 'x', ids: 42 })).toEqual({ id: 'x' });
+    expect(
+      parseMoveDropPayload({ id: 'x', containerId: 'y', index: 0, slot: 'into', ids: 42 })?.ids,
+    ).toBeUndefined();
+    // ids never substitutes for a missing/malformed id — the payload is dropped
+    expect(parseMoveIdPayload({ ids: ['a'] })).toBeNull();
+    expect(
+      parseMoveDropPayload({ ids: ['a'], containerId: 'y', index: 0, slot: 'into' }),
+    ).toBeNull();
   });
 });
 

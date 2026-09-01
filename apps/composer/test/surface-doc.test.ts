@@ -6,6 +6,7 @@ import {
   ROOT_ID,
   SURFACE_ID,
   ancestorChainOf,
+  canMoveGroupTo,
   canMoveTo,
   componentTree,
   emptyDoc,
@@ -13,9 +14,11 @@ import {
   insertUsage,
   listContainers,
   moveComponent,
+  moveComponents,
   nextGen,
   parseRenderMessages,
   partitionForDelete,
+  partitionForMove,
   removeComponent,
   removeComponentProp,
   setComponentProp,
@@ -760,6 +763,215 @@ describe('canMoveTo', () => {
       // the throwing op uses the exact same message (toThrow substring match)
       expect(() => moveComponent(doc, id, containerId, 0)).toThrow(verdict.reason);
     }
+  });
+});
+
+describe('moveComponents (contract §5 group move)', () => {
+  /** root Column → [a, b, c, d] (four Text leaves) for group reorder tests. */
+  function groupDoc(): SurfaceDoc {
+    return docWith([
+      { id: ROOT_ID, component: 'Column', children: ['a', 'b', 'c', 'd'] },
+      { id: 'a', component: 'Text', text: 'a' },
+      { id: 'b', component: 'Text', text: 'b' },
+      { id: 'c', component: 'Text', text: 'c' },
+      { id: 'd', component: 'Text', text: 'd' },
+    ]);
+  }
+
+  it('moves the effective set as ONE contiguous run in DOCUMENT order, not selection order', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['col', 'a', 'b', 'c'] },
+      { id: 'col', component: 'Column', children: [] },
+      { id: 'a', component: 'Text', text: 'a' },
+      { id: 'b', component: 'Text', text: 'b' },
+      { id: 'c', component: 'Text', text: 'c' },
+    ]);
+    // selection order [c, a] — the flat-list (document) order is [a, c]
+    const result = moveComponents(doc, ['c', 'a'], 'col', 0);
+    expect(result.moved).toEqual(['a', 'c']);
+    expect(result.skipped).toEqual([]);
+    expect(comp(result.doc, 'col').children).toEqual(['a', 'c']);
+    expect(comp(result.doc, ROOT_ID).children).toEqual(['col', 'b']);
+  });
+
+  it('same-container reorder: index is interpreted AFTER every removal', () => {
+    // Moving [a, b] of [a,b,c,d] to the end: after both removals the
+    // children are [c, d], so index 2 — NOT 4 — lands the run at the end.
+    const toEnd = moveComponents(groupDoc(), ['a', 'b'], ROOT_ID, 2).doc;
+    expect(comp(toEnd, ROOT_ID).children).toEqual(['c', 'd', 'a', 'b']);
+    // A non-adjacent selection [b, d] to the front stays contiguous.
+    const toFront = moveComponents(groupDoc(), ['d', 'b'], ROOT_ID, 0).doc;
+    expect(comp(toFront, ROOT_ID).children).toEqual(['b', 'd', 'a', 'c']);
+    // Middle position: [a, c] at index 1 of the after-removal [b, d].
+    const toMid = moveComponents(groupDoc(), ['a', 'c'], ROOT_ID, 1).doc;
+    expect(comp(toMid, ROOT_ID).children).toEqual(['b', 'a', 'c', 'd']);
+  });
+
+  it('clamps out-of-range and non-finite indices to the post-removal range', () => {
+    const over = moveComponents(groupDoc(), ['a', 'b'], ROOT_ID, 99).doc;
+    expect(comp(over, ROOT_ID).children).toEqual(['c', 'd', 'a', 'b']);
+    const under = moveComponents(groupDoc(), ['c', 'd'], ROOT_ID, -5).doc;
+    expect(comp(under, ROOT_ID).children).toEqual(['c', 'd', 'a', 'b']);
+    const nan = moveComponents(groupDoc(), ['a', 'b'], ROOT_ID, Number.NaN).doc;
+    expect(comp(nan, ROOT_ID).children).toEqual(['c', 'd', 'a', 'b']);
+  });
+
+  it('subsumption: a selected proper ancestor carries its descendants (moved once)', () => {
+    const doc = nestedDoc();
+    // inner sits inside card (child slot + children chain); selecting both
+    // moves the card subtree ONCE — inner never leaves cardBody.
+    const result = moveComponents(doc, ['card', 'inner'], 'paneB', 0);
+    expect(result.moved).toEqual(['card']);
+    expect(result.skipped).toEqual([]);
+    expect(comp(result.doc, 'paneB').children).toEqual(['card']);
+    expect(comp(result.doc, ROOT_ID).children).toEqual(['tabs', 'txt']);
+    expect(comp(result.doc, 'cardBody').children).toEqual(['inner']); // subtree intact
+  });
+
+  it('skips single-slot occupants (reported, left in place) and moves the rest', () => {
+    const doc = nestedDoc();
+    // cardBody fills card's child slot → skipped; txt moves normally.
+    const result = moveComponents(doc, ['cardBody', 'txt'], 'paneB', 0);
+    expect(result.moved).toEqual(['txt']);
+    expect(result.skipped).toEqual(['cardBody']);
+    expect(comp(result.doc, 'paneB').children).toEqual(['txt']);
+    expect(comp(result.doc, 'card').child).toBe('cardBody'); // untouched
+    expect(comp(result.doc, ROOT_ID).children).toEqual(['card', 'tabs']);
+  });
+
+  it('skips root when something else keeps the effective set non-empty', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['col'] },
+      { id: 'col', component: 'Column', children: [] },
+      { id: 'stray', component: 'Text', text: 'orphan — not subsumed by root' },
+    ]);
+    const result = moveComponents(doc, [ROOT_ID, 'stray'], 'col', 0);
+    expect(result.moved).toEqual(['stray']);
+    expect(result.skipped).toEqual([ROOT_ID]);
+    expect(comp(result.doc, 'col').children).toEqual(['stray']);
+  });
+
+  it('throws on an empty effective set: no ids, stale ids, or only unmovable members', () => {
+    const doc = nestedDoc();
+    expect(() => moveComponents(doc, [], ROOT_ID, 0)).toThrow(/nothing movable/);
+    expect(() => moveComponents(doc, ['ghost'], ROOT_ID, 0)).toThrow(/nothing movable/);
+    expect(() => moveComponents(doc, ['cardBody', 'paneA'], ROOT_ID, 0)).toThrow(/nothing movable/);
+    // a selected root subsumes every reachable id, so nothing is movable
+    expect(() => moveComponents(doc, [ROOT_ID, 'card', 'txt'], 'paneB', 0)).toThrow(
+      /nothing movable/,
+    );
+  });
+
+  it('throws for unknown and non-container targets with the single-move messages', () => {
+    const doc = nestedDoc();
+    expect(() => moveComponents(doc, ['txt'], 'gone', 0)).toThrow(/"gone" does not exist/);
+    expect(() => moveComponents(doc, ['txt'], 'card', 0)).toThrow(/is a Card, not a container/);
+    expect(() => moveComponents(doc, ['txt'], 'inner', 0)).toThrow(/not a container/);
+  });
+
+  it('throws when the target is a moved id or sits inside ANY moved subtree', () => {
+    const doc = nestedDoc();
+    // cardBody is inside card's subtree; the innocent txt must not mask that
+    expect(() => moveComponents(doc, ['txt', 'card'], 'cardBody', 0)).toThrow(
+      /own subtree.*cardBody/,
+    );
+    const cols = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['colA', 'x'] },
+      { id: 'colA', component: 'Column', children: [] },
+      { id: 'x', component: 'Text', text: 'x' },
+    ]);
+    expect(() => moveComponents(cols, ['colA', 'x'], 'colA', 0)).toThrow(/into itself/);
+  });
+
+  it('dedupes repeated ids and splices duplicate listings out everywhere', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['x', 'y', 'x'] },
+      { id: 'x', component: 'Text', text: 'x' },
+      { id: 'y', component: 'Column', children: [] },
+    ]);
+    const result = moveComponents(doc, ['x', 'x'], 'y', 0);
+    expect(result.moved).toEqual(['x']);
+    expect(comp(result.doc, ROOT_ID).children).toEqual(['y']);
+    expect(comp(result.doc, 'y').children).toEqual(['x']);
+  });
+
+  it('moves into a container with no children property yet; dataModel untouched', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['row', 'x', 'y'] },
+      { id: 'row', component: 'Row' },
+      { id: 'x', component: 'Text', text: 'x' },
+      { id: 'y', component: 'Text', text: 'y' },
+    ]);
+    doc.dataModel = { keep: true };
+    const result = moveComponents(doc, ['y', 'x'], 'row', 5);
+    expect(comp(result.doc, 'row').children).toEqual(['x', 'y']);
+    expect(comp(result.doc, ROOT_ID).children).toEqual(['row']);
+    expect(result.doc.dataModel).toBe(doc.dataModel);
+  });
+
+  it('is pure: never mutates the input doc', () => {
+    const doc = nestedDoc();
+    const before = structuredClone(doc);
+    moveComponents(doc, ['txt', 'card'], 'paneB', 0);
+    expect(doc).toEqual(before);
+  });
+});
+
+describe('canMoveGroupTo', () => {
+  it('returns ok for legal group moves (same-container reorders included)', () => {
+    const doc = nestedDoc();
+    expect(canMoveGroupTo(doc, ['card', 'txt'], 'paneB')).toEqual({ ok: true });
+    expect(canMoveGroupTo(doc, ['txt'], ROOT_ID)).toEqual({ ok: true });
+    // skipped members do not poison an otherwise-legal group
+    expect(canMoveGroupTo(doc, ['cardBody', 'txt'], 'paneB')).toEqual({ ok: true });
+    // a subsumed descendant rides along inside its ancestor's subtree
+    expect(canMoveGroupTo(doc, ['card', 'inner'], 'paneB')).toEqual({ ok: true });
+  });
+
+  it('refuses an empty effective set as {ok:false}, never a throw', () => {
+    const doc = nestedDoc();
+    const emptyGroups = [[], ['ghost'], ['cardBody'], [ROOT_ID], [ROOT_ID, 'card', 'txt']];
+    for (const ids of emptyGroups) {
+      const verdict = canMoveGroupTo(doc, ids, ROOT_ID);
+      expect(verdict.ok).toBe(false);
+      if (!verdict.ok) expect(verdict.reason).toMatch(/nothing movable/);
+    }
+  });
+
+  it('mirrors every moveComponents refusal as {ok:false, reason} with the same message', () => {
+    const doc = nestedDoc();
+    const cases: [string[], string, RegExp][] = [
+      [['txt'], 'gone', /does not exist/],
+      [['txt'], 'card', /not a container/],
+      [['txt', 'card'], 'cardBody', /own subtree/],
+      [[], ROOT_ID, /nothing movable/],
+    ];
+    for (const [ids, containerId, pattern] of cases) {
+      const verdict = canMoveGroupTo(doc, ids, containerId);
+      expect(verdict.ok).toBe(false);
+      if (verdict.ok) continue;
+      expect(verdict.reason).toMatch(pattern);
+      // the throwing op uses the exact same message (toThrow substring match)
+      expect(() => moveComponents(doc, ids, containerId, 0)).toThrow(verdict.reason);
+    }
+  });
+});
+
+describe('partitionForMove (contract §4e group move)', () => {
+  it('mirrors the partitionForDelete buckets but keeps movable deduped in DOCUMENT order', () => {
+    const doc = nestedDoc();
+    // flat-list order: root, card, cardBody, inner, tabs, paneA, paneB, txt
+    expect(partitionForMove(doc, ['txt', 'paneA', 'inner', 'card', 'txt'])).toEqual({
+      movable: ['card', 'txt'], // document order, duplicate txt collapsed
+      subsumed: ['inner'], // under selected card
+      skipped: ['paneA'], // Tabs slot occupant
+    });
+  });
+
+  it('drops stale ids and handles the empty selection', () => {
+    const doc = nestedDoc();
+    expect(partitionForMove(doc, ['ghost'])).toEqual({ movable: [], subsumed: [], skipped: [] });
+    expect(partitionForMove(doc, [])).toEqual({ movable: [], subsumed: [], skipped: [] });
   });
 });
 

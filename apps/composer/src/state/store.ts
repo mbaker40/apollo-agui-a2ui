@@ -38,11 +38,13 @@ import type { InsertTarget, SurfaceDoc } from '../lib/surface-doc';
 import {
   ROOT_ID,
   ancestorChainOf,
+  canMoveGroupTo,
   canMoveTo,
   emptyDoc,
   insertTargetFor,
   insertUsage,
   moveComponent,
+  moveComponents,
   parseRenderMessages,
   partitionForDelete,
   removeComponent,
@@ -262,6 +264,15 @@ export interface ComposerActions {
   deleteSelected(): ActionResult;
   /** Re-homes `id` into `containerId` at `index` (AFTER-removal semantics, §5). */
   moveComponentTo(id: string, containerId: string, index: number): ActionResult;
+  /**
+   * Group move (§4e/§5): re-homes every movable member of `ids` into
+   * `containerId` as ONE contiguous run in document order at `index`
+   * (interpreted AFTER every removal) — exactly one undo snapshot; skipped
+   * members (root, single-slot occupants) are reported via toast, like
+   * group delete. Shared by the canvas MOVE_DROP-with-ids path and the tree
+   * group drag.
+   */
+  moveComponentsTo(ids: string[], containerId: string, index: number): ActionResult;
   // selection + mode
   /**
    * On mobile, selecting brings the full-screen Design view forward (mirror
@@ -615,6 +626,16 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       // across it (the lift anchor usually sits IN the old hit's chain)
       // would jump to an ancestor the user never tapped toward. Reset.
       lastCanvasHitId = null;
+      if (payload.ids !== undefined && payload.ids.length > 0) {
+        // Group lift (§4e group move): `ids` marks that the catalog lifted
+        // the whole multi-selection — the selection stays EXACTLY the
+        // current group, so unlike the single lift we do not collapse it.
+        log(
+          'lifecycle',
+          `COMPOSERX_MOVE_START — lifting ${payload.ids.length} components ("${payload.id}" grabbed)`,
+        );
+        return;
+      }
       log('lifecycle', `COMPOSERX_MOVE_START — lifting "${payload.id}"`);
       // autoView false: the §4e drag is still in flight inside the iframe —
       // hiding the canvas view now would leave the user dropping blind
@@ -623,6 +644,13 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     },
     bridgeMoveDrop(payload) {
       if (state.mode === 'preview') return;
+      if (payload.ids !== undefined && payload.ids.length > 0) {
+        // Group drop (§4e): moveComponentsTo validates via canMoveGroupTo —
+        // an invalid or empty-effective-set drop logs the refusal and
+        // leaves the doc (and undo stack) untouched.
+        actions.moveComponentsTo(payload.ids, payload.containerId, payload.index);
+        return;
+      }
       // moveComponentTo validates via canMoveTo: an invalid drop logs the
       // refusal reason and leaves the doc unchanged (§4e — the composer is
       // authoritative, the catalog mutates nothing itself).
@@ -845,6 +873,44 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       } catch (err) {
         const error = errorMessage(err);
         log('error', `Move ${id} failed: ${error}`);
+        return { ok: false, error };
+      }
+    },
+
+    moveComponentsTo(ids, containerId, index) {
+      // Group move (contract §4e/§5). Stale members (a doc change raced the
+      // gesture) drop out first; canMoveGroupTo is the shared validity gate —
+      // refusals (empty effective set included) surface as a logged reason +
+      // ActionResult error, never a throw, and change NOTHING.
+      const present = ids.filter((id) => state.doc.components.some((c) => c.id === id));
+      const verdict = canMoveGroupTo(state.doc, present, containerId);
+      if (!verdict.ok) {
+        log('error', `Group move refused: ${verdict.reason}`);
+        return { ok: false, error: verdict.reason };
+      }
+      try {
+        const { doc, moved, skipped } = moveComponents(state.doc, present, containerId, index);
+        // Same-position drops (the moveComponentTo precedent): nothing
+        // changed, so no undo snapshot, no re-render, nothing to report.
+        if (JSON.stringify(doc.components) === JSON.stringify(state.doc.components)) {
+          return { ok: true };
+        }
+        // ONE applyDoc = one undo snapshot + one RENDER_A2UI for the whole
+        // run. The moved ids all still exist, so reconcileSelection keeps
+        // the group selected (primary included).
+        applyDoc(doc, `move ${moved.join(', ')} → ${containerId}[${index}]`);
+        if (skipped.length > 0) {
+          // Contract §4e: skipped members are reported like group delete —
+          // they stay put and stay selected.
+          const names = skipped.map((s) => `#${s}`).join(', ');
+          actions.showToast(
+            `${skipped.length} skipped — single-slot occupant${skipped.length === 1 ? '' : 's'} (${names})`,
+          );
+        }
+        return { ok: true };
+      } catch (err) {
+        const error = errorMessage(err);
+        log('error', `Group move failed: ${error}`);
         return { ok: false, error };
       }
     },

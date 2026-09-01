@@ -128,26 +128,49 @@ export interface PropSpecsPayload {
 /** COMPOSERX_MOVE_START / COMPOSERX_MOVE_CANCEL: the lifted component (§4e). */
 export interface MoveIdPayload {
   id: string;
+  /**
+   * Group move (§4e, sidecar v5): the full lifted selection — sent ONLY when
+   * a group lift happened (`id` stays the pressed grab handle). Absent on
+   * single lifts and from pre-v5 catalogs.
+   */
+  ids?: string[];
 }
 
 /**
  * COMPOSERX_MOVE_DROP (§4e): where the catalog wants the component re-homed.
  * `index` is the position in `containerId`'s children AFTER the moved id is
- * removed (contract §5). The composer stays authoritative and validates via
- * canMoveTo before applying.
+ * removed — after ALL moved ids are removed when `ids` marks a group drop
+ * (contract §5). The composer stays authoritative and validates via
+ * canMoveTo / canMoveGroupTo before applying.
  */
 export interface MoveDropPayload {
   id: string;
   containerId: string;
   index: number;
   slot: 'before' | 'after' | 'into';
+  /** Group move (§4e): the lifted selection, present only on group drops. */
+  ids?: string[];
+}
+
+/**
+ * Tolerant read of the optional §4e group-move `ids`: a non-array yields
+ * undefined (single-move semantics — the flag is an enhancement, not the
+ * message), and malformed entries (non-strings, empty strings) are dropped
+ * defensively rather than failing the whole payload.
+ */
+function parseMoveIds(payload: object): string[] | undefined {
+  const ids = (payload as { ids?: unknown }).ids;
+  if (!Array.isArray(ids)) return undefined;
+  return ids.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
 }
 
 /** Shape check for MOVE_START/MOVE_CANCEL payloads; null = malformed, drop it. */
 export function parseMoveIdPayload(payload: unknown): MoveIdPayload | null {
   if (!payload || typeof payload !== 'object') return null;
   const id = (payload as { id?: unknown }).id;
-  return typeof id === 'string' && id.length > 0 ? { id } : null;
+  if (typeof id !== 'string' || id.length === 0) return null;
+  const ids = parseMoveIds(payload);
+  return ids !== undefined ? { id, ids } : { id };
 }
 
 /** Shape check for MOVE_DROP payloads; null = malformed, drop it. */
@@ -158,7 +181,10 @@ export function parseMoveDropPayload(payload: unknown): MoveDropPayload | null {
   if (typeof containerId !== 'string' || containerId.length === 0) return null;
   if (typeof index !== 'number' || !Number.isFinite(index)) return null;
   if (slot !== 'before' && slot !== 'after' && slot !== 'into') return null;
-  return { id, containerId, index, slot };
+  const ids = parseMoveIds(payload);
+  return ids !== undefined
+    ? { id, containerId, index, slot, ids }
+    : { id, containerId, index, slot };
 }
 
 export interface DndHoverPayload {

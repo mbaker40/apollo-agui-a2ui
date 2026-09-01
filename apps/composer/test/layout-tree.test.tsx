@@ -300,7 +300,7 @@ describe('multi-select in the tree (contract §4f)', () => {
     expect(screen.getByTestId('tree-node-welcome-cta').className).not.toContain('selected');
   });
 
-  it('starting a row drag collapses a multi-selection to the dragged id', () => {
+  it('starting a row drag on a NON-member collapses a multi-selection to the dragged id', () => {
     const store = setup();
     act(() => {
       store.actions.toggleSelected('welcome-title');
@@ -309,6 +309,97 @@ describe('multi-select in the tree (contract §4f)', () => {
     startMoveDrag('welcome-cta');
     expect(store.getState().selectedComponentIds).toEqual(['welcome-cta']);
     expect(store.getState().selectedComponentId).toBe('welcome-cta');
+  });
+});
+
+describe('group drag in the tree (contract §4e group move)', () => {
+  it('dragging a MEMBER of the multi-selection keeps the whole selection (no collapse)', () => {
+    const store = setup();
+    act(() => store.actions.setSelection(['welcome-title', 'welcome-text']));
+    startMoveDrag('welcome-title');
+    expect(store.getState().selectedComponentIds).toEqual(['welcome-title', 'welcome-text']);
+    expect(store.getState().selectedComponentId).toBe('welcome-title');
+  });
+
+  it('a member drop group-moves the selection with the adjusted index — one undo step', () => {
+    const store = setup();
+    // selection order deliberately reversed vs document order
+    act(() => store.actions.setSelection(['welcome-text', 'welcome-title']));
+    startMoveDrag('welcome-text');
+    const row = screen.getByTestId('tree-row-welcome-cta');
+    mockRect(row);
+    // lower half of the cta leaf row → after it: raw index 3 in welcome-body;
+    // BOTH moved ids sit above → after-all-removals index 1 → [cta, title, text]
+    fireDrag(row, 'drop', {
+      clientY: 125,
+      dataTransfer: { getData: (t: string) => (t === MOVE_MIME ? 'welcome-text' : '') },
+    });
+    expect(bodyChildren(store)).toEqual(['welcome-cta', 'welcome-title', 'welcome-text']);
+    expect(store.getState().undoStack).toHaveLength(1); // ONE snapshot for the group
+    // the moved set stays selected, primary unchanged
+    expect(store.getState().selectedComponentIds).toEqual(['welcome-text', 'welcome-title']);
+    expect(store.getState().selectedComponentId).toBe('welcome-text');
+  });
+
+  it('group dragover validates via canMoveGroupTo: no-drop inside a moved subtree', () => {
+    const store = setup();
+    // welcome-cta is subsumed under selected welcome-card → effective set is
+    // just the card; anywhere inside its subtree must refuse.
+    act(() => store.actions.setSelection(['welcome-card', 'welcome-cta']));
+    startMoveDrag('welcome-card');
+    const row = screen.getByTestId('tree-row-welcome-title'); // inside the card subtree
+    mockRect(row);
+    const dt = moveDt();
+    const notPrevented = fireDrag(row, 'dragover', { clientY: 102, dataTransfer: dt });
+    expect(notPrevented).toBe(true); // not prevented → browser refuses the drop
+    expect(dt.dropEffect).toBe('none');
+    expect(row.className).toContain('no-drop');
+    // a forced drop still changes nothing (moveComponentsTo re-validates)
+    const before = store.getState().doc;
+    fireDrag(row, 'drop', {
+      clientY: 102,
+      dataTransfer: { getData: (t: string) => (t === MOVE_MIME ? 'welcome-card' : '') },
+    });
+    expect(store.getState().doc).toBe(before);
+    expect(store.getState().undoStack).toHaveLength(0);
+    expect(store.getState().events.some((e) => e.kind === 'error')).toBe(true);
+  });
+
+  it('skipped members are toasted on a partial group drop and stay put', () => {
+    const store = setup();
+    // welcome-cta-label fills the Button child slot → skipped; the title moves.
+    act(() => store.actions.setSelection(['welcome-cta-label', 'welcome-title']));
+    startMoveDrag('welcome-title'); // member → group lift
+    const row = screen.getByTestId('tree-row-root');
+    mockRect(row);
+    fireDrag(row, 'drop', {
+      clientY: 115, // middle third → into root, at the end
+      dataTransfer: { getData: (t: string) => (t === MOVE_MIME ? 'welcome-title' : '') },
+    });
+    const root = store.getState().doc.components.find((c) => c.id === 'root')!;
+    expect(root.children).toEqual(['welcome-card', 'welcome-title']);
+    expect(bodyChildren(store)).toEqual(['welcome-text', 'welcome-cta']);
+    expect(store.getState().toast?.message).toBe(
+      '1 skipped — single-slot occupant (#welcome-cta-label)',
+    );
+    expect(store.getState().doc.components.find((c) => c.id === 'welcome-cta')!.child).toBe(
+      'welcome-cta-label',
+    );
+  });
+
+  it('a NON-member drag collapses the selection and single-moves as before', () => {
+    const store = setup();
+    act(() => store.actions.setSelection(['welcome-title', 'welcome-text']));
+    startMoveDrag('welcome-cta'); // not in the selection
+    expect(store.getState().selectedComponentIds).toEqual(['welcome-cta']);
+    const row = screen.getByTestId('tree-row-welcome-title');
+    mockRect(row);
+    fireDrag(row, 'drop', {
+      clientY: 102, // upper half → before welcome-title (index 0)
+      dataTransfer: { getData: (t: string) => (t === MOVE_MIME ? 'welcome-cta' : '') },
+    });
+    expect(bodyChildren(store)).toEqual(['welcome-cta', 'welcome-title', 'welcome-text']);
+    expect(store.getState().selectedComponentIds).toEqual(['welcome-cta']);
   });
 });
 

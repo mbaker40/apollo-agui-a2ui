@@ -2,12 +2,13 @@
 
 Custom-styled React **basic catalog renderer** for the A2UI composer. Runs in a
 sandboxed iframe and speaks the official A2UI Preview Bridge protocol (via the
-vendored `packages/a2ui-bridge`), plus the additive `COMPOSERX_*` **sidecar v3**
+vendored `packages/a2ui-bridge`), plus the additive `COMPOSERX_*` **sidecar v4**
 defined in [`docs/composer/CONTRACT.md`](../../docs/composer/CONTRACT.md)
-(sections 4, 4b, 4c, 4d, 4e): drag-and-drop hit-testing with Figma-like dashed
-drop indicators, edit/preview modes with click-to-select and selection
-outlines, schema-derived prop specs, and press-and-drag canvas move of placed
-components. Dev port: **7465**.
+(sections 4, 4b, 4c, 4d, 4e, 4f): drag-and-drop hit-testing with Figma-like
+dashed drop indicators, edit/preview modes with click-to-select and selection
+outlines, schema-derived prop specs, press-and-drag canvas move of placed
+components, and marquee + multi-select (rubber-band selection, shift-click /
+long-press additive selects, multi-outlines). Dev port: **7465**.
 
 ## Quickstart
 
@@ -68,14 +69,14 @@ var(--a2ui-border))`). `basicCatalog.themeSchema` is **undefined** in 0.10.2,
   sample we configure no markdown renderer, so it renders as plain text (the
   package logs a one-time console warning).
 
-## COMPOSERX sidecar v3
+## COMPOSERX sidecar v4
 
-Message shapes and semantics: contract sections 4/4b/4c/4d/4e. Features
+Message shapes and semantics: contract sections 4/4b/4c/4d/4e/4f. Features
 announced right after the bridge handshake:
 
 ```ts
 { type: 'COMPOSERX_SIDECAR_READY',
-  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move'], version: 3 } }
+  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move', 'multi-select'], version: 4 } }
 ```
 
 immediately followed by `COMPOSERX_PROP_SPECS` (section 4d, below). Both are
@@ -98,7 +99,9 @@ shell does). Split into:
     anchor's edge;
   - background / empty canvas → `'into'` the root (`targetId: null`);
   - also home to the canvas-move pure logic (contract 4e, below):
-    `resolveLiftAnchor` and the `excludeSubtree` view of `resolveDropTarget`.
+    `resolveLiftAnchor` and the `excludeSubtree` view of `resolveDropTarget` —
+    and to the marquee candidate rule (contract 4f, below):
+    `marqueeCandidates` + `rectsIntersect`.
 - `src/prop-specs.ts` — pure derivation of per-component `PropSpec[]` from
   the REAL zod schemas (see "Prop specs" below).
 - `src/sidecar.ts` — DOM plumbing, started from `main.tsx`: origin-checked
@@ -125,13 +128,15 @@ shell does). Split into:
   `COMPOSERX_SELECT {id: <deepest data-a2ui-id> | null}` (null = background
   click). Moving the pointer draws a local, rAF-throttled 1px accent hover
   outline (no messages).
-- `COMPOSERX_SET_SELECTION {id | null}` (the composer is the source of
+- `COMPOSERX_SET_SELECTION {id | null, ids?}` (the composer is the source of
   truth) renders a **solid 2px accent outline, offset 1px** around the
-  component's rect. It re-anchors after every `RENDER_A2UI` (re-measured on
+  primary (`id`) component's rect — and, since v4, a lighter **1.5px /
+  70%-accent** outline around every other id in `ids` (contract 4f, below).
+  All outlines re-anchor after every `RENDER_A2UI` (re-measured on
   chained timeouts + animation frames, because the bridge defers
   `createSurface` remounts by a macrotask), on window resize/scroll, and via
-  a `ResizeObserver` on the selected component's first box. If the id no
-  longer renders, the outline is removed.
+  a `ResizeObserver` on each outlined component's first box. Ids that no
+  longer render are dropped individually.
 - **Preview mode** removes the veil and all hover/selection outlines;
   components behave fully live (actions → `SEND_TO_SERVER`). The selection
   id is retained sidecar-side and redrawn on the next switch to edit.
@@ -196,6 +201,68 @@ messages cross the frame:
   catalog **mutates nothing**: the composer validates (`canMoveTo`) and
   applies `moveComponent`, then re-sends `RENDER_A2UI`, which re-anchors the
   selection outline through the existing path.
+
+### Marquee + multi-select (contract 4f, feature `'multi-select'`)
+
+The selection becomes a list (the composer stays authoritative). One veil
+pointerdown can now end several ways, arbitrated by the 5px threshold and a
+350ms long-press timer (`LONG_PRESS_MS`):
+
+| Press on   | Gesture                         | Outcome                                                         |
+| ---------- | ------------------------------- | --------------------------------------------------------------- |
+| component  | quick sub-threshold release     | `COMPOSERX_SELECT {id}` (plain, unchanged v3 payload)           |
+| component  | quick sub-threshold + **shift** | `COMPOSERX_SELECT {id, additive: true}`                         |
+| component  | held ≥ 350ms, sub-threshold     | `COMPOSERX_SELECT {id, additive: true}` immediately + pulse     |
+| component  | moved past ~5px                 | the section-4e move lift (`MOVE_START` → `DROP`/`CANCEL`)       |
+| background | quick sub-threshold release     | `COMPOSERX_SELECT {id: null}` (deselect, unchanged)             |
+| background | moved past ~5px                 | marquee → `COMPOSERX_MARQUEE {ids}` on pointerup (`[]` allowed) |
+
+- **Long-press vs lift arbitration**: the timer is armed at pointerdown for
+  every component press (liftable or not) and cancelled the instant the
+  pointer crosses the threshold — so the additive toggle is checked BEFORE
+  the 4e lift and a long-press can never turn into a lift. Once the timer
+  fires, the additive SELECT posts immediately, the gesture is consumed
+  (pointer capture is kept, but all subsequent movement is ignored and the
+  trailing click is suppressed one-shot), and a brief accent **pulse**
+  (`data-composerx-pulse`, ~380ms) on the pressed component gives
+  haptic-style feedback. The SELECT carries the **deepest** hit id from
+  pointerdown, exactly like the click path.
+- **Shift**: additive applies only to component clicks; a shift-click on the
+  background stays the plain `{id: null}` deselect (background has no
+  additive meaning). Plain clicks omit the `additive` key entirely, so v3
+  hosts see byte-identical payloads.
+- **Marquee**: a background (deepest hit null) press that crosses the
+  threshold starts the rubber band — **solid** 1px accent border with an
+  ~8% accent wash (`data-composerx-marquee="band"`; dashed stays reserved
+  for drop indicators) in its own `pointer-events: none` fixed layer
+  (`composerx-marquee-layer`, stacked above the selection layer). Each
+  animation frame the candidates are recomputed and live-highlighted with
+  light 1.5px solid outlines (`data-composerx-marquee="candidate"`; rects
+  measured once per frame per id). Pointerup re-resolves at the final rect
+  and posts `COMPOSERX_MARQUEE {ids}` (empty array when nothing
+  intersects); the trailing click is suppressed so no stray deselect
+  follows. **Escape or `pointercancel` aborts silently** — visuals clear,
+  NO message. Switching to preview or a `RENDER_A2UI` landing mid-marquee
+  also aborts silently (mid-move they still post `MOVE_CANCEL`, as in v3).
+- **Candidate rule** (`marqueeCandidates`, pure + unit-tested): components
+  whose rect intersects the marquee rect (any positive overlap; touching
+  edges don't count; degenerate zero-width/height line drags still cross),
+  MINUS any whose ancestor — via the full reference edges (`children`,
+  `child`, Modal `trigger`/`content`, Tabs `tabs[].child`) — is itself
+  intersecting: sweeping across a Card yields the Card, never the Card plus
+  its subtree. The root is never a candidate (and never subsumes). Order is
+  flat document order. Rects come from the same wrapper-descendant union
+  measurement as everything else (the `display: contents` wrappers have no
+  box of their own); unmeasurable components are skipped.
+- **Multi-outlines**: `COMPOSERX_SET_SELECTION {id, ids?}` — `ids` is the
+  full list, primary included. The primary keeps the 4c treatment (2px
+  solid accent, 1px offset); every other id gets 1.5px solid at 70% accent,
+  same offset. The single-outline machinery was generalized rather than
+  duplicated: outline boxes are keyed by component id
+  (`data-composerx-outline-id`), reused across refreshes, re-anchored
+  through the same RENDER_A2UI / resize / scroll / ResizeObserver paths,
+  and dropped individually when an id stops rendering. A payload without
+  `ids` behaves exactly like v3.
 
 ### Prop specs (contract 4d)
 

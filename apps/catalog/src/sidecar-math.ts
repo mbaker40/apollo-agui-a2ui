@@ -1,10 +1,11 @@
 /**
- * Pure logic for the COMPOSERX drag-and-drop sidecar (contract sections 4 and
- * 4e): mirrors the component tree from RENDER_A2UI traffic, resolves a hover
- * point + deepest-hit component id into a drop target
+ * Pure logic for the COMPOSERX drag-and-drop sidecar (contract sections 4, 4e
+ * and 4f): mirrors the component tree from RENDER_A2UI traffic, resolves a
+ * hover point + deepest-hit component id into a drop target
  * (`containerId`/`index`/`slot`/`rect`) — optionally with a moved component's
- * subtree excluded — and resolves the canvas-move lift anchor. DOM concerns
- * live in sidecar.ts.
+ * subtree excluded — resolves the canvas-move lift anchor, and computes the
+ * marquee candidate set (topmost-intersecting rule). DOM concerns live in
+ * sidecar.ts.
  */
 
 export interface Rect {
@@ -399,4 +400,61 @@ function intoTarget(
   }
 
   return { targetId: containerId, containerId, index, slot: 'into', rect };
+}
+
+/* ----------------------------------------- marquee candidates (4f) -- */
+
+/**
+ * Whether two rects share any positive overlap along both axes. Touching
+ * edges (zero-area contact) do NOT count as overlap; a degenerate marquee
+ * (zero width or height from a perfectly straight drag) still intersects
+ * everything its line crosses.
+ */
+export function rectsIntersect(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/**
+ * Contract section 4f, the topmost-intersecting candidate rule: candidates
+ * are the components whose rect intersects the marquee rect (any overlap),
+ * MINUS any whose ancestor — via the full reference edges: `children`,
+ * `child`, Modal `trigger`/`content`, Tabs `tabs[].child` — is itself an
+ * intersecting component. Sweeping across a Card yields the Card, never the
+ * Card plus its subtree. The root component is never a candidate (and, being
+ * excluded, never subsumes its children). Components without a measurable
+ * rect (`getRect` → null) are skipped. Order: flat document order — the
+ * order of the mirrored `updateComponents` list.
+ */
+export function marqueeCandidates(
+  store: SurfaceStore,
+  getRect: (id: string) => Rect | null,
+  rect: Rect,
+): string[] {
+  const rootId = findRootId(store);
+  const intersecting = new Set<string>();
+  for (const id of store.components.keys()) {
+    if (id === rootId) continue;
+    const componentRect = getRect(id);
+    if (componentRect !== null && rectsIntersect(componentRect, rect)) {
+      intersecting.add(id);
+    }
+  }
+  if (intersecting.size === 0) return [];
+  const parents = buildParentIndex(store);
+  const candidates: string[] = [];
+  for (const id of intersecting) {
+    let subsumed = false;
+    const seen = new Set<string>([id]);
+    let ancestorId = parents.get(id);
+    while (ancestorId !== undefined && !seen.has(ancestorId)) {
+      if (intersecting.has(ancestorId)) {
+        subsumed = true;
+        break;
+      }
+      seen.add(ancestorId); // cycle guard for malformed trees
+      ancestorId = parents.get(ancestorId);
+    }
+    if (!subsumed) candidates.push(id);
+  }
+  return candidates;
 }

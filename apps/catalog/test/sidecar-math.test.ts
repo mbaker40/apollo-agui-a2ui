@@ -5,6 +5,8 @@ import {
   createStore,
   findRootId,
   mainAxis,
+  marqueeCandidates,
+  rectsIntersect,
   resolveDropTarget,
   resolveLiftAnchor,
   type Rect,
@@ -367,5 +369,107 @@ describe('resolveDropTarget with excludeSubtree (contract 4e move)', () => {
     const excluded = resolveExcluding(150, 55, 'root', 'no-such-id');
     const plain = resolve(150, 55, 'root');
     expect(excluded).toEqual(plain);
+  });
+});
+
+describe('marqueeCandidates (contract 4f, topmost-intersecting)', () => {
+  const getRect = (id: string) => RECTS[id] ?? null;
+
+  function candidates(rect: Rect, store = makeStore(), rects = getRect) {
+    return marqueeCandidates(store, rects, rect);
+  }
+
+  it('rectsIntersect: any positive overlap counts, zero-area edge contact does not', () => {
+    const a: Rect = { x: 0, y: 0, width: 10, height: 10 };
+    expect(rectsIntersect(a, { x: 9, y: 9, width: 10, height: 10 })).toBe(true);
+    expect(rectsIntersect(a, { x: 10, y: 0, width: 10, height: 10 })).toBe(false); // touching edge
+    expect(rectsIntersect(a, { x: 11, y: 0, width: 10, height: 10 })).toBe(false);
+    // Degenerate zero-width marquee (straight vertical drag) still crosses.
+    expect(rectsIntersect({ x: 5, y: -5, width: 0, height: 20 }, a)).toBe(true);
+  });
+
+  it('collects intersecting components in flat document order, root excluded', () => {
+    // A thin strip down the left edge clips text-1, row-1, and card-1 (all
+    // start at x=10) but not text-2 (x=20); root intersects but is excluded.
+    expect(candidates({ x: 0, y: 0, width: 15, height: 300 })).toEqual([
+      'text-1',
+      'row-1',
+      'card-1',
+    ]);
+  });
+
+  it('a full-canvas sweep yields the top layer only (children subsumed via every edge kind)', () => {
+    expect(candidates({ x: 0, y: 0, width: 300, height: 300 })).toEqual([
+      'text-1',
+      'row-1',
+      'card-1',
+    ]);
+  });
+
+  it('sweeping across a Card yields the Card, never the Card plus its child', () => {
+    // Covers card-1 (10,170 280x80) and its slot-bound text-4 (20,180 260x60).
+    expect(candidates({ x: 5, y: 165, width: 290, height: 90 })).toEqual(['card-1']);
+  });
+
+  it('sweeping across a Row yields the Row, not its children', () => {
+    expect(candidates({ x: 15, y: 65, width: 270, height: 90 })).toEqual(['row-1']);
+  });
+
+  it('subsumes through slot reference edges (Button child, Tabs tabs[].child)', () => {
+    const store = makeStore([
+      { id: 'root', component: 'Column', children: ['button-1', 'tabs-1'] },
+      { id: 'button-1', component: 'Button', child: 'button-label' },
+      { id: 'button-label', component: 'Text', text: 'Go' },
+      { id: 'tabs-1', component: 'Tabs', tabs: [{ title: 't', child: 'tab-child' }] },
+      { id: 'tab-child', component: 'Text', text: 'pane' },
+    ]);
+    const rects: Record<string, Rect> = {
+      root: { x: 0, y: 0, width: 300, height: 300 },
+      'button-1': { x: 10, y: 10, width: 100, height: 40 },
+      'button-label': { x: 20, y: 20, width: 80, height: 20 },
+      'tabs-1': { x: 10, y: 60, width: 200, height: 100 },
+      'tab-child': { x: 20, y: 80, width: 180, height: 60 },
+    };
+    const swept = marqueeCandidates(store, (id) => rects[id] ?? null, {
+      x: 0,
+      y: 0,
+      width: 250,
+      height: 200,
+    });
+    expect(swept).toEqual(['button-1', 'tabs-1']);
+  });
+
+  it('keeps an intersecting child whose ancestors are not themselves intersecting', () => {
+    // row-1 has no measurable rect (e.g. rendered without a box): text-2 is
+    // not subsumed because its ancestor never made the intersecting set.
+    const noRowRect = (id: string) => (id === 'row-1' ? null : (RECTS[id] ?? null));
+    expect(candidates({ x: 15, y: 65, width: 270, height: 90 }, makeStore(), noRowRect)).toEqual([
+      'text-2',
+      'text-3',
+    ]);
+  });
+
+  it('a marquee over empty root space (or fully outside) yields []', () => {
+    // Inside root's rect but touching no child: root alone intersects and is
+    // never a candidate.
+    expect(candidates({ x: 100, y: 260, width: 50, height: 30 })).toEqual([]);
+    // Fully outside everything.
+    expect(candidates({ x: 310, y: 10, width: 20, height: 20 })).toEqual([]);
+    // Zero-area contact with text-1's right edge (x=290) is not overlap.
+    expect(candidates({ x: 290, y: 10, width: 20, height: 30 })).toEqual([]);
+  });
+
+  it('a degenerate line drag still selects everything it crosses', () => {
+    expect(candidates({ x: 150, y: 0, width: 0, height: 300 })).toEqual([
+      'text-1',
+      'row-1',
+      'card-1',
+    ]);
+  });
+
+  it('an empty store yields []', () => {
+    expect(
+      marqueeCandidates(createStore(), getRect, { x: 0, y: 0, width: 10, height: 10 }),
+    ).toEqual([]);
   });
 });

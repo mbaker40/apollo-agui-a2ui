@@ -1,6 +1,6 @@
 /**
- * COMPOSERX sidecar v3 (contract sections 4, 4b, 4c, 4d, 4e). Rides the same
- * postMessage channel as the Preview Bridge with the same origin rules:
+ * COMPOSERX sidecar v4 (contract sections 4, 4b, 4c, 4d, 4e, 4f). Rides the
+ * same postMessage channel as the Preview Bridge with the same origin rules:
  * accepts host messages via DomainOriginVerificationService, replies to the
  * origin given by `?origin=` (falling back to our own origin, exactly like
  * the bridge's resolveExpectedParentOrigin).
@@ -36,12 +36,35 @@
  *   slot} (index = position AFTER the moved id's removal) or MOVE_CANCEL
  *   (no target, Escape mid-drag, pointercancel). The catalog mutates
  *   nothing — the composer applies the move and re-sends RENDER_A2UI.
+ * - v4 (multi-select, section 4f): the SAME pointerdown can now end four
+ *   ways. On a COMPONENT: sub-threshold quick release = plain SELECT (the
+ *   existing click path, additive:true when shift is held); sub-threshold
+ *   press held ~350ms = additive SELECT toggle (checked BEFORE the 4e lift —
+ *   the long-press timer is cancelled the moment the 5px threshold is
+ *   crossed, and once it fires the gesture is consumed: pointer capture is
+ *   kept but all subsequent movement is ignored, the move lift can no longer
+ *   start, and the trailing click is suppressed; a brief accent pulse on the
+ *   pressed component gives haptic-style feedback). Over-threshold = the 4e
+ *   move lift, exactly as before. On the BACKGROUND (deepest hit null):
+ *   sub-threshold release stays the deselect click (SELECT {id:null});
+ *   crossing the threshold starts the marquee — a SOLID 1px accent rubber
+ *   band with an ~8% accent wash (dashed stays reserved for drop
+ *   indicators), candidates recomputed each rAF (marqueeCandidates,
+ *   topmost-intersecting rule) and live-highlighted with light solid
+ *   outlines; pointerup posts COMPOSERX_MARQUEE {ids} ([] when nothing
+ *   intersects); Escape or pointercancel aborts silently (visuals cleared,
+ *   NO message). COMPOSERX_SET_SELECTION additionally accepts {id, ids?}:
+ *   the primary keeps the 2px solid accent outline, every other id in `ids`
+ *   gets a lighter 1.5px / 70%-accent outline; all outlines re-anchor after
+ *   RENDER_A2UI through the same machinery, and ids that no longer render
+ *   are dropped individually. A payload without `ids` behaves exactly as v3.
  */
 
 import { DomainOriginVerificationService } from 'a2ui-bridge';
 import {
   applyRenderItems,
   createStore,
+  marqueeCandidates,
   resolveDropTarget,
   resolveLiftAnchor,
   type DropTarget,
@@ -62,19 +85,39 @@ export const COMPOSERX_PROP_SPECS = 'COMPOSERX_PROP_SPECS';
 export const COMPOSERX_MOVE_START = 'COMPOSERX_MOVE_START';
 export const COMPOSERX_MOVE_DROP = 'COMPOSERX_MOVE_DROP';
 export const COMPOSERX_MOVE_CANCEL = 'COMPOSERX_MOVE_CANCEL';
+export const COMPOSERX_MARQUEE = 'COMPOSERX_MARQUEE';
 
-/** Contract section 4: sidecar v3 announcement payload. */
-export const SIDECAR_FEATURES = ['dnd-hittest', 'select', 'prop-specs', 'move'] as const;
-export const SIDECAR_VERSION = 3;
+/** Contract section 4: sidecar v4 announcement payload. */
+export const SIDECAR_FEATURES = [
+  'dnd-hittest',
+  'select',
+  'prop-specs',
+  'move',
+  'multi-select',
+] as const;
+export const SIDECAR_VERSION = 4;
 
 export const DROP_INDICATOR_LAYER_ID = 'composerx-drop-indicator-layer';
 export const EDIT_VEIL_ID = 'composerx-edit-veil';
 export const HOVER_LAYER_ID = 'composerx-hover-layer';
 export const SELECTION_LAYER_ID = 'composerx-selection-layer';
 export const MOVE_LAYER_ID = 'composerx-move-layer';
+/** Marquee rubber band + live candidate highlights + the long-press pulse. */
+export const MARQUEE_LAYER_ID = 'composerx-marquee-layer';
 
-/** Contract section 4e: pointer travel (px) past which a press becomes a move. */
+/**
+ * Contract sections 4e/4f: pointer travel (px) past which a press becomes a
+ * move (component press) or a marquee (background press).
+ */
 export const MOVE_THRESHOLD_PX = 5;
+
+/**
+ * Contract section 4f: a component press held this long WITHOUT crossing
+ * MOVE_THRESHOLD_PX posts an additive SELECT toggle. Checked BEFORE the 4e
+ * lift — crossing the threshold cancels the timer; once it has fired the
+ * gesture can never lift.
+ */
+export const LONG_PRESS_MS = 350;
 
 /** Stamped on the veil and every overlay layer so hit-testing can skip them. */
 const LAYER_ATTR = 'data-composerx-layer';
@@ -83,13 +126,15 @@ const LAYER_ATTR = 'data-composerx-layer';
 const Z_VEIL = '999990';
 const Z_HOVER = '999994';
 const Z_SELECTION = '999995';
+const Z_MARQUEE = '999996'; // rubber band + candidate highlights, above selection
 const Z_DROP = '999998';
 const Z_MOVE = '999999'; // move ghost + dimmed origin, above the drop indicators
 
 const ACCENT = 'var(--brand-accent, #6d28d9)';
 const ACCENT_FAINT = 'color-mix(in srgb, var(--brand-accent, #6d28d9) 45%, transparent)';
 const ACCENT_WASH = 'color-mix(in srgb, var(--brand-accent, #6d28d9) 8%, transparent)';
-const ACCENT_HOVER = 'color-mix(in srgb, var(--brand-accent, #6d28d9) 70%, transparent)';
+/** 70% accent: hover outline, marquee candidate highlights, and the 4f secondary selection outlines. */
+const ACCENT_SOFT = 'color-mix(in srgb, var(--brand-accent, #6d28d9) 70%, transparent)';
 /** Fade-toward-background wash that dims the origin rect during a move. */
 const ORIGIN_DIM = 'color-mix(in srgb, var(--a2ui-color-background, #faf9f7) 60%, transparent)';
 
@@ -97,39 +142,76 @@ const store: SurfaceStore = createStore();
 let started = false;
 let announced = false;
 let mode: 'edit' | 'preview' = 'preview';
+/** Primary selection (COMPOSERX_SET_SELECTION `id`, contract 4c). */
 let selectedId: string | null = null;
+/** Full selection list (SET_SELECTION `ids`, contract 4f); [] when absent (v3 payload). */
+let selectedIds: string[] = [];
 let veil: HTMLElement | null = null;
 let hoverPoint: { x: number; y: number } | null = null;
 let hoverFramePending = false;
 let propSpecsCache: PropSpecsPayload | null = null;
 let selectionObserver: ResizeObserver | null = null;
-let observedElement: Element | null = null;
+let observedElements: Element[] = [];
 const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 const pendingFrames = new Set<number>();
 
-/** Canvas-move gesture state (contract 4e). One gesture at a time. */
-interface MoveGesture {
+/**
+ * Veil gesture state (contracts 4e + 4f). One gesture at a time. Every
+ * gesture starts at pointerdown and is discriminated by what was pressed:
+ * a COMPONENT press can end as a quick click-select, an additive long-press
+ * toggle, or the 4e move lift; a BACKGROUND press (deepest hit null) can end
+ * as the deselect click or the 4f marquee.
+ */
+interface GestureBase {
   /** undefined when the environment delivers plain MouseEvents (jsdom). */
   pointerId: number | undefined;
   startX: number;
   startY: number;
-  /** Lift anchor (resolveLiftAnchor at pointerdown): the id a drag moves. */
-  moveId: string;
-  componentType: string;
-  /** True once pointer travel crossed MOVE_THRESHOLD_PX and MOVE_START posted. */
+  /**
+   * True once pointer travel crossed MOVE_THRESHOLD_PX: the press became a
+   * move lift (component) or a marquee (background).
+   */
   active: boolean;
+}
+interface ComponentGesture extends GestureBase {
+  kind: 'component';
+  /** Deepest hit at pointerdown — the id a click/long-press SELECTs (4c/4f). */
+  hitId: string;
+  /**
+   * Lift anchor (resolveLiftAnchor at pointerdown): the id a drag moves.
+   * null = this press can never lift (the root, a slot-only occupant); the
+   * click and long-press paths still apply.
+   */
+  moveId: string | null;
+  componentType: string;
+  /** Pending 4f long-press timer; cleared on threshold-cross/up/cancel. */
+  longPressTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * True once the long-press fired (additive SELECT posted): the gesture is
+   * consumed — capture is kept but movement is ignored, a lift can no longer
+   * start, and the trailing click is suppressed.
+   */
+  longPressFired: boolean;
   originRect: Rect | null;
   /** Pointer offset inside the origin rect, so the ghost stays under the grab. */
   grabDx: number;
   grabDy: number;
 }
-let gesture: MoveGesture | null = null;
+interface BackgroundGesture extends GestureBase {
+  kind: 'background';
+}
+type VeilGesture = ComponentGesture | BackgroundGesture;
+
+let gesture: VeilGesture | null = null;
 let movePoint: { x: number; y: number } | null = null;
 let moveFramePending = false;
+let marqueePoint: { x: number; y: number } | null = null;
+let marqueeFramePending = false;
 /**
- * Set when a move starts: the gesture's trailing click event must not post
- * the click-derived COMPOSERX_SELECT (contract 4e). One-shot, consumed by
- * onVeilClick and reset on the next pointerdown.
+ * Set when a move, marquee, or long-press starts: the gesture's trailing
+ * click event must not post the click-derived COMPOSERX_SELECT (contracts
+ * 4e/4f). One-shot, consumed by onVeilClick and reset on the next
+ * pointerdown.
  */
 let suppressClickOnce = false;
 
@@ -492,22 +574,31 @@ function later(callback: () => void, delay: number): void {
 }
 
 function onVeilClick(event: MouseEvent): void {
-  // Contract 4e: once a move has started, the click-derived SELECT for that
-  // gesture is suppressed (a sub-threshold press never sets the flag, so a
-  // plain click selects exactly as before).
+  // Contracts 4e/4f: once a move, marquee, or long-press has started, the
+  // click-derived SELECT for that gesture is suppressed (a sub-threshold
+  // quick press never sets the flag, so a plain click selects as before).
   if (suppressClickOnce) {
     suppressClickOnce = false;
     return;
   }
   const id = hitTestDeepest(event.clientX, event.clientY);
+  // Contract 4f: shift-click on a component selects additively. The flag is
+  // omitted (not false) on plain clicks so v3 hosts see byte-identical
+  // payloads; a background (id null) click is always the plain deselect —
+  // shift has no additive meaning there.
+  if (id !== null && event.shiftKey) {
+    postToParent({ type: COMPOSERX_SELECT, payload: { id, additive: true } });
+    return;
+  }
   postToParent({ type: COMPOSERX_SELECT, payload: { id } });
 }
 
 function onVeilPointerMove(event: PointerEvent): void {
   if (gesture !== null && gesture.pointerId === event.pointerId) {
-    trackMove(event.clientX, event.clientY);
-    // An active move owns the pointer: no hover outline underneath the drag.
-    if (gesture !== null && gesture.active) return;
+    trackGesture(event.clientX, event.clientY);
+    // An active move/marquee owns the pointer (no hover outline underneath),
+    // and a fired long-press has consumed the gesture entirely.
+    if (gesture !== null && (gesture.active || isFiredLongPress(gesture))) return;
   }
   hoverPoint = { x: event.clientX, y: event.clientY };
   if (hoverFramePending) return;
@@ -516,6 +607,10 @@ function onVeilPointerMove(event: PointerEvent): void {
     hoverFramePending = false;
     refreshHoverOutline();
   });
+}
+
+function isFiredLongPress(g: VeilGesture): boolean {
+  return g.kind === 'component' && g.longPressFired;
 }
 
 function onVeilPointerLeave(): void {
@@ -553,44 +648,142 @@ function onVeilPointerDown(event: PointerEvent): void {
   suppressClickOnce = false; // a fresh gesture always starts clean
   if (gesture !== null) return; // one gesture at a time (ignore extra pointers)
   if (event.button !== 0) return;
+  const hitId = hitTestDeepest(event.clientX, event.clientY);
+  if (hitId === null) {
+    // Contract 4f: a BACKGROUND press arms the marquee candidate. A
+    // sub-threshold pointerup stays the existing deselect click; crossing
+    // the threshold starts the rubber band. No long-press timer — background
+    // has no additive meaning.
+    gesture = {
+      kind: 'background',
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+    capturePointer(event.pointerId);
+    return;
+  }
   // Contract 4e lift anchor: climb from the deepest hit to the nearest
-  // component whose parent reference is a children-array splice. Background,
-  // the root, and slot-only occupants without such an ancestor arm nothing —
-  // the press stays a plain click-select.
-  const moveId = resolveLiftAnchor(store, hitTestDeepest(event.clientX, event.clientY));
-  if (moveId === null) return;
-  gesture = {
+  // component whose parent reference is a children-array splice. The root
+  // and slot-only occupants without such an ancestor can never lift
+  // (moveId null) but still take the click and 4f long-press paths.
+  const moveId = resolveLiftAnchor(store, hitId);
+  const g: ComponentGesture = {
+    kind: 'component',
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
+    hitId,
     moveId,
-    componentType: store.components.get(moveId)?.component ?? 'Component',
+    componentType: store.components.get(moveId ?? hitId)?.component ?? 'Component',
     active: false,
+    longPressTimer: null,
+    longPressFired: false,
     originRect: null,
     grabDx: 0,
     grabDy: 0,
   };
+  gesture = g;
+  // Contract 4f long-press: checked BEFORE the 4e lift. Armed for every
+  // component press; cancelled the instant the threshold is crossed.
+  g.longPressTimer = setTimeout(() => {
+    g.longPressTimer = null;
+    if (gesture !== g || g.active) return; // superseded (defensive)
+    fireLongPress(g);
+  }, LONG_PRESS_MS);
   // Capture immediately so threshold tracking survives leaving the iframe.
   capturePointer(event.pointerId);
 }
 
-function trackMove(x: number, y: number): void {
+function clearLongPress(g: VeilGesture): void {
+  if (g.kind !== 'component' || g.longPressTimer === null) return;
+  clearTimeout(g.longPressTimer);
+  g.longPressTimer = null;
+}
+
+/**
+ * Contract 4f: the press was held LONG_PRESS_MS without crossing the
+ * threshold — post the additive SELECT toggle immediately and consume the
+ * gesture. A long-press never turns into a lift: pointer capture is kept (so
+ * no other element sees the tail of the gesture) but every subsequent
+ * movement is ignored, and the trailing click is suppressed one-shot.
+ */
+function fireLongPress(g: ComponentGesture): void {
+  g.longPressFired = true;
+  suppressClickOnce = true;
+  postToParent({ type: COMPOSERX_SELECT, payload: { id: g.hitId, additive: true } });
+  renderAdditivePulse(g.hitId);
+}
+
+/** Haptic-style feedback for the 4f long-press: a brief accent pulse. */
+function renderAdditivePulse(id: string): void {
+  const rect = rectForComponent(id);
+  if (rect === null) return;
+  const layer = ensureLayer(MARQUEE_LAYER_ID, Z_MARQUEE);
+  if (layer === null) return;
+  const pulse = document.createElement('div');
+  pulse.setAttribute('data-composerx-pulse', 'additive');
+  positionBox(pulse, inflate(rect, 3));
+  Object.assign(pulse.style, {
+    borderStyle: 'solid',
+    borderWidth: '2px',
+    borderColor: ACCENT,
+    borderRadius: '6px',
+    backgroundColor: ACCENT_WASH,
+    opacity: '1',
+    transition: 'opacity 220ms ease-out',
+  });
+  layer.appendChild(pulse);
+  later(() => {
+    pulse.style.opacity = '0';
+  }, 140);
+  later(() => {
+    pulse.remove();
+  }, 380);
+}
+
+function trackGesture(x: number, y: number): void {
   const g = gesture;
   if (g === null) return;
+  if (g.kind === 'component') {
+    if (g.longPressFired) return; // consumed: a long-press never lifts (4f)
+    if (!g.active) {
+      if (Math.hypot(x - g.startX, y - g.startY) <= MOVE_THRESHOLD_PX) return;
+      clearLongPress(g); // threshold crossed: the additive toggle is off the table
+      if (g.moveId === null) {
+        // Nothing to lift (v3 parity): the press dies quietly; the trailing
+        // click still selects whatever ends up under the pointer.
+        gesture = null;
+        return;
+      }
+      startMove(g);
+    }
+    movePoint = { x, y };
+    if (moveFramePending) return;
+    moveFramePending = true;
+    scheduleFrame(() => {
+      moveFramePending = false;
+      refreshMoveVisuals();
+    });
+    return;
+  }
+  // Background press: marquee (contract 4f).
   if (!g.active) {
     if (Math.hypot(x - g.startX, y - g.startY) <= MOVE_THRESHOLD_PX) return;
-    startMove(g);
+    startMarquee(g);
   }
-  movePoint = { x, y };
-  if (moveFramePending) return;
-  moveFramePending = true;
+  marqueePoint = { x, y };
+  if (marqueeFramePending) return;
+  marqueeFramePending = true;
   scheduleFrame(() => {
-    moveFramePending = false;
-    refreshMoveVisuals();
+    marqueeFramePending = false;
+    refreshMarqueeVisuals();
   });
 }
 
-function startMove(g: MoveGesture): void {
+function startMove(g: ComponentGesture): void {
+  if (g.moveId === null) return; // guarded by the caller
   g.active = true;
   suppressClickOnce = true;
   g.originRect = rectForComponent(g.moveId);
@@ -605,13 +798,13 @@ function startMove(g: MoveGesture): void {
   clearLayer(HOVER_LAYER_ID);
   // Escape cancels mid-drag; the iframe owns focus during the gesture, so the
   // listener lives here (window, capture) and only while a move is active.
-  window.addEventListener('keydown', onMoveKeyDown, true);
+  window.addEventListener('keydown', onGestureKeyDown, true);
   postToParent({ type: COMPOSERX_MOVE_START, payload: { id: g.moveId } });
   renderMoveScaffold(g);
 }
 
 /** Ghost (follows the pointer) + dimmed dashed-outline origin rect. */
-function renderMoveScaffold(g: MoveGesture): void {
+function renderMoveScaffold(g: ComponentGesture): void {
   const layer = ensureLayer(MOVE_LAYER_ID, Z_MOVE);
   if (layer === null) return;
   layer.replaceChildren();
@@ -672,7 +865,7 @@ function renderMoveScaffold(g: MoveGesture): void {
 
 function positionGhost(x: number, y: number): void {
   const g = gesture;
-  if (g === null) return;
+  if (g === null || g.kind !== 'component') return;
   const ghost = document
     .getElementById(MOVE_LAYER_ID)
     ?.querySelector('[data-composerx-move="ghost"]') as HTMLElement | null;
@@ -701,17 +894,99 @@ function resolveMoveTarget(x: number, y: number, moveId: string): DropTarget {
 /** rAF-throttled: ghost position + drop indicator for the latest pointer. */
 function refreshMoveVisuals(): void {
   const g = gesture;
-  if (g === null || !g.active || movePoint === null) return;
+  if (g === null || g.kind !== 'component' || !g.active || movePoint === null) return;
+  if (g.moveId === null) return; // unreachable: active implies a lift anchor
   positionGhost(movePoint.x, movePoint.y);
   drawIndicator(resolveMoveTarget(movePoint.x, movePoint.y, g.moveId));
 }
 
 /** Clears everything a move drew; never touches the selection outline. */
 function clearMoveVisuals(): void {
-  window.removeEventListener('keydown', onMoveKeyDown, true);
+  window.removeEventListener('keydown', onGestureKeyDown, true);
   movePoint = null;
   clearLayer(MOVE_LAYER_ID);
   clearIndicator();
+}
+
+/* -------------------------------------------------- marquee (4f) -- */
+
+/** Normalized marquee rect between the gesture origin and the pointer. */
+function marqueeRectFrom(g: GestureBase, x: number, y: number): Rect {
+  return {
+    x: Math.min(g.startX, x),
+    y: Math.min(g.startY, y),
+    width: Math.abs(x - g.startX),
+    height: Math.abs(y - g.startY),
+  };
+}
+
+/**
+ * Contract 4f: the background press crossed the threshold — the rubber band
+ * starts. The trailing click is suppressed (the gesture now ends in a
+ * MARQUEE post or a silent abort, never the deselect click).
+ */
+function startMarquee(g: BackgroundGesture): void {
+  g.active = true;
+  suppressClickOnce = true;
+  hoverPoint = null;
+  clearLayer(HOVER_LAYER_ID);
+  // Escape aborts mid-marquee; same listener lifecycle as the move gesture.
+  window.addEventListener('keydown', onGestureKeyDown, true);
+}
+
+/**
+ * rAF-throttled: redraws the rubber band (SOLID 1px accent border, ~8%
+ * accent wash — dashed is reserved for drop indicators, contract 4b/4f) and
+ * the live candidate highlights (light solid outlines) for the latest
+ * pointer. Rects are measured once per frame per id.
+ */
+function refreshMarqueeVisuals(): void {
+  const g = gesture;
+  if (g === null || g.kind !== 'background' || !g.active || marqueePoint === null) return;
+  const layer = ensureLayer(MARQUEE_LAYER_ID, Z_MARQUEE);
+  if (layer === null) return;
+  layer.replaceChildren();
+  const rect = marqueeRectFrom(g, marqueePoint.x, marqueePoint.y);
+  const rectCache = new Map<string, Rect | null>();
+  const getRect = (id: string): Rect | null => {
+    let cached = rectCache.get(id);
+    if (cached === undefined) {
+      cached = rectForComponent(id);
+      rectCache.set(id, cached);
+    }
+    return cached;
+  };
+  for (const id of marqueeCandidates(store, getRect, rect)) {
+    const candidateRect = getRect(id);
+    if (candidateRect === null) continue;
+    const box = document.createElement('div');
+    box.setAttribute('data-composerx-marquee', 'candidate');
+    positionBox(box, inflate(candidateRect, 1));
+    Object.assign(box.style, {
+      borderStyle: 'solid',
+      borderWidth: '1.5px',
+      borderColor: ACCENT_SOFT,
+      borderRadius: '4px',
+    });
+    layer.appendChild(box);
+  }
+  const band = document.createElement('div');
+  band.setAttribute('data-composerx-marquee', 'band');
+  positionBox(band, rect);
+  Object.assign(band.style, {
+    borderStyle: 'solid',
+    borderWidth: '1px',
+    borderColor: ACCENT,
+    backgroundColor: ACCENT_WASH,
+  });
+  layer.appendChild(band);
+}
+
+/** Clears everything a marquee drew; never touches the selection outline. */
+function clearMarqueeVisuals(): void {
+  window.removeEventListener('keydown', onGestureKeyDown, true);
+  marqueePoint = null;
+  clearLayer(MARQUEE_LAYER_ID);
 }
 
 function onVeilPointerUp(event: PointerEvent): void {
@@ -719,7 +994,25 @@ function onVeilPointerUp(event: PointerEvent): void {
   if (g === null || g.pointerId !== event.pointerId) return;
   releasePointer(event.pointerId);
   gesture = null;
-  if (!g.active) return; // sub-threshold press: the trailing click SELECTs
+  clearLongPress(g);
+  // Sub-threshold press: the trailing click handles it — plain/shift SELECT
+  // (component), SELECT {id:null} deselect (background) — unless a fired
+  // long-press already posted the additive SELECT and suppressed the click.
+  if (!g.active) return;
+  if (g.kind === 'background') {
+    // Contract 4f: pointerup ends the marquee — re-resolve the candidates at
+    // the final rect (the rAF-throttled visuals may lag a frame) and post
+    // them ([] when nothing intersects).
+    clearMarqueeVisuals();
+    const ids = marqueeCandidates(
+      store,
+      rectForComponent,
+      marqueeRectFrom(g, event.clientX, event.clientY),
+    );
+    postToParent({ type: COMPOSERX_MARQUEE, payload: { ids } });
+    return;
+  }
+  if (g.moveId === null) return; // unreachable: active implies a lift anchor
   clearMoveVisuals();
   // Re-resolve at the drop point (the rAF-throttled state may lag a frame).
   const target = resolveMoveTarget(event.clientX, event.clientY, g.moveId);
@@ -741,27 +1034,35 @@ function onVeilPointerUp(event: PointerEvent): void {
 function onVeilPointerCancel(event: PointerEvent): void {
   if (gesture === null || gesture.pointerId !== event.pointerId) return;
   releasePointer(event.pointerId);
-  cancelActiveMove();
+  cancelActiveGesture();
 }
 
 /**
- * Drops the in-flight gesture; posts MOVE_CANCEL when a move had actually
- * started (threshold crossed). Safe to call when nothing is in flight.
+ * Drops the in-flight gesture (clearing any pending long-press timer). For a
+ * move that had actually started (threshold crossed) it posts MOVE_CANCEL
+ * (unless `post` is false); an aborted marquee is always SILENT — visuals
+ * clear, no message (contract 4f). Safe to call when nothing is in flight.
  */
-function cancelActiveMove(post = true): void {
+function cancelActiveGesture(post = true): void {
   const g = gesture;
   gesture = null;
-  if (g === null || !g.active) return;
+  if (g === null) return;
+  clearLongPress(g);
+  if (!g.active) return;
+  if (g.kind === 'background') {
+    clearMarqueeVisuals();
+    return;
+  }
   clearMoveVisuals();
   if (post) postToParent({ type: COMPOSERX_MOVE_CANCEL, payload: { id: g.moveId } });
 }
 
-/** Active only while a move is in flight (added in startMove). */
-function onMoveKeyDown(event: KeyboardEvent): void {
+/** Active only while a move or marquee is in flight (added on start). */
+function onGestureKeyDown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
   event.preventDefault();
   event.stopPropagation();
-  cancelActiveMove();
+  cancelActiveGesture();
 }
 
 function ensureVeil(): HTMLElement | null {
@@ -823,7 +1124,9 @@ function applyMode(): void {
     ensureVeil();
     blurActiveComponentElement();
   } else {
-    cancelActiveMove(); // leaving edit mid-drag posts MOVE_CANCEL (4e)
+    // Leaving edit mid-gesture posts MOVE_CANCEL for a lifted move (4e);
+    // an in-flight marquee aborts silently (4f).
+    cancelActiveGesture();
     removeVeil();
     hoverPoint = null;
     clearLayer(HOVER_LAYER_ID);
@@ -845,54 +1148,111 @@ function handleSetSelection(payload: unknown): void {
   if (typeof payload !== 'object' || payload === null) return;
   const id = (payload as { id?: unknown }).id;
   if (typeof id !== 'string' && id !== null) return;
+  const rawIds = (payload as { ids?: unknown }).ids;
   selectedId = id;
+  // Contract 4f: `ids` is the full selection list (primary included). A v3
+  // payload without `ids` stores [] and behaves exactly as before.
+  selectedIds = Array.isArray(rawIds)
+    ? rawIds.filter((value): value is string => typeof value === 'string')
+    : [];
   refreshSelectionOutline();
 }
 
-function observeSelected(element: Element | null): void {
+function observeSelected(elements: Element[]): void {
   if (typeof ResizeObserver === 'undefined') return;
-  if (observedElement === element) return;
-  selectionObserver?.disconnect();
-  observedElement = element;
-  if (element !== null) {
-    selectionObserver ??= new ResizeObserver(() => refreshSelectionOutline());
-    selectionObserver.observe(element);
+  if (
+    elements.length === observedElements.length &&
+    elements.every((element, index) => element === observedElements[index])
+  ) {
+    return;
   }
+  selectionObserver?.disconnect();
+  observedElements = elements;
+  if (elements.length === 0) return;
+  selectionObserver ??= new ResizeObserver(() => refreshSelectionOutline());
+  for (const element of elements) selectionObserver.observe(element);
 }
 
 /**
- * Draws (or clears) the solid selection outline for the current mode +
- * selection. Measures by id at call time, so calling it again re-anchors.
+ * Draws (or clears) the solid selection outlines for the current mode +
+ * selection list (contracts 4c + 4f): the primary (`id`) gets the 2px solid
+ * accent outline (1px offset), every other id in `ids` a lighter 1.5px /
+ * 70%-accent outline. Measures by id at call time, so calling it again
+ * re-anchors; ids that no longer render are dropped individually. Boxes are
+ * keyed by component id and reused across refreshes (scroll/resize/observer
+ * churn), with the primary kept first in the layer.
  */
 function refreshSelectionOutline(): void {
   if (typeof document === 'undefined' || !document.body) return;
-  const wrapper = mode === 'edit' && selectedId !== null ? wrapperFor(selectedId) : null;
-  if (wrapper === null) {
+  const wanted: { id: string; primary: boolean }[] = [];
+  if (mode === 'edit') {
+    if (selectedId !== null) wanted.push({ id: selectedId, primary: true });
+    for (const id of selectedIds) {
+      if (id !== selectedId && !wanted.some((entry) => entry.id === id)) {
+        wanted.push({ id, primary: false });
+      }
+    }
+  }
+  const entries: { id: string; primary: boolean; wrapper: Element; rect: Rect }[] = [];
+  for (const { id, primary } of wanted) {
+    const wrapper = wrapperFor(id);
+    if (wrapper === null) continue; // no longer renders: dropped individually
+    // jsdom (and a component rendering no boxes) yields no union rect; fall
+    // back to the wrapper's own bounding rect so the outline still exists.
+    entries.push({ id, primary, wrapper, rect: unionRectOf(wrapper) ?? domRectOf(wrapper) });
+  }
+  if (entries.length === 0) {
     clearLayer(SELECTION_LAYER_ID);
-    observeSelected(null);
+    observeSelected([]);
     return;
   }
-  // jsdom (and a component rendering no boxes) yields no union rect; fall
-  // back to the wrapper's own bounding rect so the outline still exists.
-  const rect = unionRectOf(wrapper) ?? domRectOf(wrapper);
   const layer = ensureLayer(SELECTION_LAYER_ID, Z_SELECTION);
   if (layer === null) return;
-  let box = layer.firstElementChild as HTMLElement | null;
-  if (box === null) {
-    box = document.createElement('div');
-    box.setAttribute('data-composerx-outline', 'selection');
-    // Solid 2px accent outline with a 1px offset (contract 4c): the drawn
-    // box is the component rect inflated by 3px (1px gap + 2px border).
-    Object.assign(box.style, {
-      borderStyle: 'solid',
-      borderWidth: '2px',
-      borderColor: ACCENT,
-      borderRadius: '6px',
-    });
-    layer.appendChild(box);
+  const previous = new Map<string, HTMLElement>();
+  for (const child of Array.from(layer.children)) {
+    const key = child.getAttribute('data-composerx-outline-id');
+    if (key !== null && !previous.has(key)) previous.set(key, child as HTMLElement);
   }
-  positionBox(box, inflate(rect, 3));
-  observeSelected(wrapper.firstElementChild);
+  const kept = new Set<Element>();
+  for (const entry of entries) {
+    let box = previous.get(entry.id) ?? null;
+    if (box === null) {
+      box = document.createElement('div');
+      box.setAttribute('data-composerx-outline-id', entry.id);
+    }
+    box.setAttribute('data-composerx-outline', entry.primary ? 'selection' : 'selection-secondary');
+    if (entry.primary) {
+      // Solid 2px accent outline with a 1px offset (contract 4c): the drawn
+      // box is the component rect inflated by 3px (1px gap + 2px border).
+      Object.assign(box.style, {
+        borderStyle: 'solid',
+        borderWidth: '2px',
+        borderColor: ACCENT,
+        borderRadius: '6px',
+      });
+      positionBox(box, inflate(entry.rect, 3));
+    } else {
+      // Contract 4f secondary: 1.5px solid at 70% accent, same 1px offset
+      // (rect inflated by 2.5px = 1px gap + 1.5px border).
+      Object.assign(box.style, {
+        borderStyle: 'solid',
+        borderWidth: '1.5px',
+        borderColor: ACCENT_SOFT,
+        borderRadius: '6px',
+      });
+      positionBox(box, inflate(entry.rect, 2.5));
+    }
+    layer.appendChild(box); // appends new boxes and re-orders reused ones
+    kept.add(box);
+  }
+  for (const child of Array.from(layer.children)) {
+    if (!kept.has(child)) child.remove();
+  }
+  observeSelected(
+    entries
+      .map((entry) => entry.wrapper.firstElementChild)
+      .filter((element): element is Element => element !== null),
+  );
 }
 
 function domRectOf(element: Element): Rect {
@@ -922,7 +1282,7 @@ function refreshHoverOutline(): void {
     Object.assign(box.style, {
       borderStyle: 'solid',
       borderWidth: '1px',
-      borderColor: ACCENT_HOVER,
+      borderColor: ACCENT_SOFT,
       borderRadius: '4px',
     });
     layer.appendChild(box);
@@ -964,9 +1324,10 @@ function onMessage(event: MessageEvent): void {
   if (data === null || typeof data !== 'object' || typeof data.type !== 'string') return;
   switch (data.type) {
     case 'RENDER_A2UI':
-      // A re-render invalidates the mirrored tree an in-flight move is
-      // resolving against — cancel it (the composer treats CANCEL as a no-op).
-      cancelActiveMove();
+      // A re-render invalidates the mirrored tree an in-flight move or
+      // marquee is resolving against — cancel it (the composer treats a
+      // MOVE_CANCEL as a no-op; a marquee aborts silently).
+      cancelActiveGesture();
       // Read-only mirror of the tree; the bridge does the actual rendering.
       applyRenderItems(store, data.payload !== undefined ? data.payload : data);
       clearIndicator();
@@ -1006,12 +1367,15 @@ export function destroyComposerxSidecar(): void {
     window.removeEventListener('message', onMessage);
     window.removeEventListener('resize', onWindowChange);
     window.removeEventListener('scroll', onWindowChange, true);
-    window.removeEventListener('keydown', onMoveKeyDown, true);
+    window.removeEventListener('keydown', onGestureKeyDown, true);
     document.removeEventListener('focusin', onFocusIn, true);
   }
+  if (gesture !== null) clearLongPress(gesture);
   gesture = null;
   movePoint = null;
   moveFramePending = false;
+  marqueePoint = null;
+  marqueeFramePending = false;
   suppressClickOnce = false;
   for (const id of pendingTimers) clearTimeout(id);
   pendingTimers.clear();
@@ -1021,18 +1385,25 @@ export function destroyComposerxSidecar(): void {
   pendingFrames.clear();
   selectionObserver?.disconnect();
   selectionObserver = null;
-  observedElement = null;
+  observedElements = [];
   veil?.remove();
   veil = null;
   started = false;
   announced = false;
   mode = 'edit';
   selectedId = null;
+  selectedIds = [];
   hoverPoint = null;
   hoverFramePending = false;
   store.surfaceId = null;
   store.components = new Map();
-  for (const id of [DROP_INDICATOR_LAYER_ID, HOVER_LAYER_ID, SELECTION_LAYER_ID, MOVE_LAYER_ID]) {
+  for (const id of [
+    DROP_INDICATOR_LAYER_ID,
+    HOVER_LAYER_ID,
+    SELECTION_LAYER_ID,
+    MARQUEE_LAYER_ID,
+    MOVE_LAYER_ID,
+  ]) {
     document.getElementById(id)?.remove();
   }
 }

@@ -136,8 +136,11 @@ Catalog → composer, once after `RENDERER_READY`:
 
 ```ts
 { type: 'COMPOSERX_SIDECAR_READY',
-  payload: { features: ['dnd-hittest'], version: 1 } }
+  payload: { features: ['dnd-hittest', 'select', 'prop-specs'], version: 2 } }
 ```
+
+(Version 1 announced `['dnd-hittest']` only; the composer must treat every
+feature as independently optional — check the array, not the version.)
 
 Composer → catalog during a drag (throttle to animation frames):
 
@@ -186,6 +189,84 @@ on its outermost element, then hit-test via `document.elementFromPoint` +
 messages (read-only) to know the current component tree (children arrays)
 for computing `containerId`/`index`.
 
+### 4b. Drop-indicator styling (Figma-like, catalog-rendered)
+
+The catalog's indicator layer draws, during a drag:
+
+- `'before'`/`'after'` → a **dashed accent insertion line** (2px dashed
+  `--brand-accent` with rounded end-caps rendered as small dots) at the
+  caret rect, plus a faint dashed outline around the container it splices
+  into;
+- `'into'` → a **dashed accent outline** (2px dashed, 6px radius) around
+  the container rect with a very light accent wash inside;
+- no target → nothing.
+
+Everything clears on `COMPOSERX_DND_END`. The layer stays
+`pointer-events: none`, `overflow: hidden`, and never affects
+`SURFACE_RESIZE`.
+
+### 4c. Selection + edit mode (sidecar v2)
+
+The canvas doubles as a live preview, so interactivity is modal. Composer →
+catalog:
+
+```ts
+{ type: 'COMPOSERX_SET_MODE', payload: { mode: 'edit' | 'preview' } }
+{ type: 'COMPOSERX_SET_SELECTION', payload: { id: string | null } }
+```
+
+- Default mode (before any SET_MODE) is **`edit`**.
+- In **edit** mode the sidecar intercepts pointer interactions on the
+  rendered surface in the capture phase (click AND mousedown-level
+  suppression of component behavior — a Button must not fire its action, a
+  TextField must not take typed input) and posts the deepest hit id:
+
+```ts
+{ type: 'COMPOSERX_SELECT', payload: { id: string | null } }
+// null = background click (deselect)
+```
+
+The composer is the source of truth: it updates its selection state and
+answers with `COMPOSERX_SET_SELECTION`, which the catalog renders as a
+**solid 2px accent outline** (offset 1px) around that component's rect —
+dashed is reserved for drop indicators. In edit mode the sidecar also
+draws a subtler **1px accent hover outline** under the pointer (local,
+no messages). Selection outlines re-anchor after every `RENDER_A2UI`
+(re-measure by id; if the id no longer renders, clear the outline —
+the composer clears stale selection on its side).
+
+- In **preview** mode: no interception, no hover/selection outlines
+  drawn (selection state is retained composer-side), components behave
+  live exactly as before (actions → `SEND_TO_SERVER`).
+
+### 4d. Prop specs (schema-derived, catalog → composer)
+
+So the composer's inspector can render true forms without depending on the
+renderer's schema library, the catalog derives per-component prop specs
+from `@a2ui/web_core`'s zod schemas at runtime and sends them once after
+`SIDECAR_READY`:
+
+```ts
+{ type: 'COMPOSERX_PROP_SPECS', payload: {
+    components: Record<string, { props: PropSpec[] }>,
+} }
+// PropSpec = {
+//   name: string;
+//   kind: 'string' | 'number' | 'boolean' | 'enum' | 'json';
+//   options?: string[];        // kind 'enum'
+//   required?: boolean;
+//   bindable?: boolean;        // union with {path} — value may be a binding
+//   containment?: boolean;     // children/child/trigger/content/tabs — read-only in the inspector
+// }
+```
+
+Derivation walks each component schema's shape (unwrap
+optional/default/nullable; union of literal-type-or-`{path}`-object →
+base kind + `bindable`; enum → options; anything unrecognized → `'json'`).
+Containment props are marked, never widget-edited. A renderer without this
+feature (official sample) sends nothing and the composer falls back to
+generic JSON prop rows.
+
 ## 5. Composer surface document + editing ops
 
 Composer state (single source of truth) is a `SurfaceDoc`:
@@ -213,11 +294,25 @@ Composer state (single source of truth) is a `SurfaceDoc`:
   Modal / Tabs slots. Merge `ComponentUsage.data` into `doc.dataModel`
   (shallow, existing keys win). No orphan components: every non-root
   component is reachable from `root`.
+- **Prop ops** (inspector): `setComponentProp(doc, id, key, value)` and
+  `removeComponentProp(doc, id, key)` — reject `id`/`component` and the
+  containment keys (`children`, `child`, `trigger`, `content`, `tabs`);
+  everything else is fair game, values are arbitrary JSON. One undo
+  snapshot per committed edit (text fields commit on blur/Enter, discrete
+  widgets on change — never per keystroke).
+- **Remove op** (inspector Delete / Delete key): `removeComponent(doc, id)`
+  removes the component and its entire subtree, splicing its id out of the
+  parent's `children` array. It throws for `root` and for any component
+  whose parent reference is a **single slot** (`child`, `trigger`,
+  `content`, `tabs[].child`) — deleting the occupant would leave the
+  parent schema-invalid, so the inspector disables Delete there with a
+  hint ("delete the parent, or edit via JSON"). Every doc the op can
+  produce stays schema-valid.
 - Undo/redo: bounded snapshot stack of serialized docs (50 entries) —
-  every applied insert/JSON-apply/chat-apply pushes one.
+  every applied insert/JSON-apply/chat-apply/prop-commit/remove pushes one.
 - All ops are pure functions in `src/lib/surface-doc.ts` with unit tests
   (id remap, splice positions, orphan invariant, round-trip
-  parse(serialize(doc)) === doc).
+  parse(serialize(doc)) === doc, prop guards, remove-subtree behavior).
 
 ## 6. Styling contract (catalog reskin)
 
@@ -262,15 +357,47 @@ installed package + the official sample):
 
 Three-pane layout: **glossary** (left, collapsible), **canvas** (center:
 iframe + transparent drop overlay + toolbar: undo/redo, clear, theme
-toggle, renderer URL indicator), **chat** (right). Bottom drawer with tabs:
-**Layout JSON** (editable textarea + Apply/Format/Reset, error surface on
-invalid JSON), **Data model** (read-only pretty JSON, live via
+toggle, **Edit/Preview mode toggle**, renderer URL indicator), **right
+sidebar with two tabs: Design / Chat** (Figma-style). Bottom drawer with
+tabs: **Layout JSON** (editable textarea + Apply/Format/Reset, error
+surface on invalid JSON), **Data model** (read-only pretty JSON, live via
 DATA_MODEL_CHANGE), **Events** (SEND_TO_SERVER / CONSOLE_LOG / bridge
-lifecycle, newest first, cap 200). Glossary entries: component name +
-one-line description, HTML5 `draggable`, click = insert into selected
-container (keyboard/no-sidecar path). Canvas shows a "waiting for renderer"
+lifecycle, newest first, cap 200). Canvas shows a "waiting for renderer"
 state until RENDERER_READY and an error state if the iframe never
 handshakes (10s timeout with the renderer URL shown).
+
+**Glossary (visual tiles)**: each of the 18 components renders as a tile
+with a **stylized mini-preview** of the component (hand-built CSS/SVG
+glyphs styled with the same brand tokens — a violet pill for Button, a
+card outline for Card, text lines for Text, a track+thumb for Slider, …;
+theme-aware) above the name; description via `title` tooltip. Tiles stay
+HTML5 `draggable`; `dragstart` calls `setDragImage` with the tile's
+preview element so **the visual itself is what you drag**. Click still
+inserts into the current insert target (keyboard/no-sidecar path).
+
+**Selection (Figma-like)**: one selection shared by canvas clicks (sidecar
+`COMPOSERX_SELECT`, §4c), LayoutTree clicks, and the inspector. The
+insert target derives from it: the selected component if it's a
+children-array container, else its nearest container ancestor, else root.
+Selecting auto-switches the right sidebar to **Design**; Escape or a
+background click deselects. Stale ids (after undo/JSON apply/chat apply)
+clear the selection.
+
+**Design tab (inspector)**: empty-state hint when nothing is selected;
+otherwise: component type + id header, widget-per-prop form driven by
+`COMPOSERX_PROP_SPECS` (§4d — text inputs commit on blur/Enter, enum
+selects/checkboxes/number steppers on change; a binding toggle for
+`bindable` props switching the widget to a `{path}` input), a raw
+"advanced" JSON section for props without a spec (and the whole form
+falls back to JSON rows when no specs arrived), containment props
+displayed read-only, and a **Delete** button (disabled with a hint for
+single-slot occupants, per §5). Every commit re-renders the canvas and is
+one undo step. Delete/Backspace on the host document (when focus is not
+in an input) deletes the selection under the same §5 rules.
+
+**Mode toggle**: Edit (default) = canvas clicks select, components inert
+(§4c); Preview = live components, actions flow to the event log, no
+outlines. Mode is composer state (not persisted), re-sent on handshake.
 
 Settings (gear): renderer URL (default per §9, BYO renderer supported),
 Anthropic API key (password field), model picker. Persisted in

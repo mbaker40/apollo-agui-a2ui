@@ -445,7 +445,30 @@ insert target derives from it: the selected component if it's a
 children-array container, else its nearest container ancestor, else root.
 Selecting auto-switches the right sidebar to **Design**; Escape or a
 background click deselects. Stale ids (after undo/JSON apply/chat apply)
-clear the selection.
+clear the selection. **This is a single-selection model** — marquee /
+multi-select is explicitly out of scope (a separate milestone if wanted).
+
+**Ancestor honing** (parents are otherwise untappable — a canvas tap
+always hits the deepest component). Three mechanisms, composer-side only
+(the catalog keeps sending the deepest hit id; no protocol change):
+
+- **Repeat-tap cycling**: the store keeps the last canvas hit id. When a
+  `COMPOSERX_SELECT` arrives with the SAME id as the previous one AND the
+  current selection is in that id's inclusive ancestor chain, selection
+  moves one ancestor up (deepest → … → root, then wraps back to the
+  deepest); each step re-sends `SET_SELECTION` so the canvas outline
+  shows the current layer. Any other id (or a null/background tap, or a
+  selection made elsewhere in the meantime) resets the cycle and selects
+  normally. Works identically for taps and clicks.
+- **Inspector breadcrumb**: the Design header shows the full ancestor
+  path (`root › Card › Column › Text`; testid `crumb-<id>` per chip,
+  horizontally scrollable under the mobile breakpoint); tapping a crumb
+  selects that ancestor. Next to Delete sits a **select-parent button**
+  (testid `inspector-parent`, disabled on root).
+- **Tree follows selection**: whenever the selection changes, the layout
+  tree scrolls the selected node into view (`scrollIntoView` with
+  `block:'nearest'`), so the hierarchy is always one glance away on
+  mobile.
 
 **Moving placed components** — two drag surfaces over the same §5 move op,
 each one undo step:

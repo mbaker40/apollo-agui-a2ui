@@ -13,6 +13,7 @@ import type {
 import type { ComponentUsages } from 'a2ui-bridge/render-config';
 import type {
   ComposerMode,
+  DndTargetPayload,
   MoveDropPayload,
   MoveIdPayload,
   PropSpecsMap,
@@ -33,8 +34,10 @@ import {
 } from '../lib/settings';
 import type { InsertTarget, SurfaceDoc } from '../lib/surface-doc';
 import {
+  ROOT_ID,
   canMoveTo,
   emptyDoc,
+  insertTargetFor,
   insertUsage,
   moveComponent,
   parseRenderMessages,
@@ -43,10 +46,13 @@ import {
   setComponentProp,
   toRenderMessages,
 } from '../lib/surface-doc';
+import { matchMobile } from '../lib/viewport';
 import { welcomeDoc } from '../lib/welcome';
 
 export const UNDO_LIMIT = 50;
 export const EVENT_LOG_LIMIT = 200;
+/** How long the mobile insert toast stays up (contract §7b: ~2.5s). */
+export const TOAST_DURATION_MS = 2500;
 
 export type EventKind = 'lifecycle' | 'action' | 'console' | 'unknown' | 'error';
 
@@ -87,6 +93,37 @@ export interface HandshakeState {
 
 export type DrawerTab = 'json' | 'data' | 'events';
 export type RightTab = 'design' | 'chat';
+/** Which single-column view is shown ≤900px (contract §7b). Desktop ignores it. */
+export type MobileView = 'canvas' | 'add' | 'design' | 'chat';
+
+/** One toast at a time (contract §7b `mtoast`); `id` guards stale auto-clears. */
+export interface ToastState {
+  id: number;
+  message: string;
+}
+
+/** Viewport-CSS-px rect; DOMRect satisfies it, tests can pass a literal. */
+export interface CanvasDndRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * What the glossary's pointer-based grip drag needs from the canvas pane
+ * (contract §7b): the iframe rect for over/out hit-testing, the SAME
+ * rAF-throttled COMPOSERX_DND_HOVER path the HTML5 overlay drives (hoverAt
+ * converts viewport coords by subtracting the iframe bounding rect), and the
+ * held COMPOSERX_DND_TARGET reply. CanvasPane registers it on mount via
+ * attachCanvasDnd (injectable for tests, like RenderPort).
+ */
+export interface CanvasDndSurface {
+  getIframeRect(): CanvasDndRect | null;
+  hoverAt(clientX: number, clientY: number): void;
+  endHover(): void;
+  currentTarget(): DndTargetPayload | null;
+}
 
 export interface ComposerState {
   doc: SurfaceDoc;
@@ -112,6 +149,12 @@ export interface ComposerState {
   settingsOpen: boolean;
   /** True while a glossary entry is being dragged (activates the drop overlay). */
   dragging: boolean;
+  /** True ≤900px (contract §7b); tracked live via matchMedia. */
+  mobile: boolean;
+  /** The active single-column view on mobile; desktop ignores it. */
+  mobileView: MobileView;
+  /** The current mobile toast, or null. Auto-clears after TOAST_DURATION_MS. */
+  toast: ToastState | null;
 }
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -151,12 +194,17 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
 export interface ComposerStoreOptions {
   doc?: SurfaceDoc;
   settings?: Partial<ComposerSettings>;
+  /** Initial breakpoint state; defaults to matchMobile(). Injectable for tests. */
+  mobile?: boolean;
 }
 
 export interface ComposerStore {
   getState(): ComposerState;
   subscribe(listener: () => void): () => void;
   attachPort(port: RenderPort | null): void;
+  /** CanvasPane registers the live canvas DnD surface here (grip drags use it). */
+  attachCanvasDnd(surface: CanvasDndSurface | null): void;
+  getCanvasDnd(): CanvasDndSurface | null;
   actions: ComposerActions;
 }
 
@@ -179,6 +227,13 @@ export interface ComposerActions {
   handshakeTimedOut(): void;
   // document ops (all undo-able)
   insertComponent(name: string, target?: InsertTarget): ActionResult;
+  /**
+   * Shared drop-insert path (contract §7b): a held COMPOSERX_DND_TARGET wins;
+   * otherwise the structural fallback inserts at the end of the container
+   * derived from the unified selection. Used by BOTH the HTML5 drop overlay
+   * and the pointer-based grip drag.
+   */
+  insertFromDrag(name: string, target: DndTargetPayload | null): ActionResult;
   applyJsonText(text: string): ActionResult;
   applyChatItems(items: unknown): ActionResult;
   clearCanvas(): void;
@@ -190,7 +245,13 @@ export interface ComposerActions {
   /** Re-homes `id` into `containerId` at `index` (AFTER-removal semantics, §5). */
   moveComponentTo(id: string, containerId: string, index: number): ActionResult;
   // selection + mode
-  selectComponent(id: string | null): void;
+  /**
+   * On mobile, selecting brings the full-screen Design view forward (mirror
+   * of the desktop tab auto-switch) unless `opts.autoView` is false — the
+   * canvas-move gesture (§4e) selects at MOVE_START but must keep the canvas
+   * visible for the rest of the in-flight drag (contract §7b).
+   */
+  selectComponent(id: string | null, opts?: { autoView?: boolean }): void;
   setMode(mode: ComposerMode): void;
   // ui
   setDragging(dragging: boolean): void;
@@ -199,6 +260,11 @@ export interface ComposerActions {
   setDrawerTab(tab: DrawerTab): void;
   setRightTab(tab: RightTab): void;
   setSettingsOpen(open: boolean): void;
+  // mobile (contract §7b)
+  setMobile(mobile: boolean): void;
+  setMobileView(view: MobileView): void;
+  showToast(message: string): void;
+  dismissToast(): void;
   // settings
   setTheme(theme: Theme): void;
   setRendererUrl(url: string | null): void;
@@ -209,7 +275,11 @@ export interface ComposerActions {
 
 export function createComposerStore(options: ComposerStoreOptions = {}): ComposerStore {
   let port: RenderPort | null = null;
+  let canvasDnd: CanvasDndSurface | null = null;
   let eventId = 0;
+  let toastId = 0;
+  let toastTimer: ReturnType<typeof setTimeout> | null = null;
+  const initialMobile = options.mobile ?? matchMobile();
 
   let state: ComposerState = {
     doc: options.doc ?? welcomeDoc(),
@@ -230,11 +300,15 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       ...options.settings,
     },
     glossaryOpen: true,
-    drawerOpen: true,
+    // Contract §7b: the drawer starts CLOSED on mobile (screen space).
+    drawerOpen: !initialMobile,
     drawerTab: 'json',
     rightTab: 'design',
     settingsOpen: false,
     dragging: false,
+    mobile: initialMobile,
+    mobileView: 'canvas',
+    toast: null,
   };
 
   const listeners = new Set<() => void>();
@@ -404,7 +478,10 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     bridgeMoveStart(payload) {
       if (state.mode === 'preview') return;
       log('lifecycle', `COMPOSERX_MOVE_START — lifting "${payload.id}"`);
-      actions.selectComponent(payload.id);
+      // autoView false: the §4e drag is still in flight inside the iframe —
+      // hiding the canvas view now would leave the user dropping blind
+      // (contract §7b: canvas move must keep working under touch).
+      actions.selectComponent(payload.id, { autoView: false });
     },
     bridgeMoveDrop(payload) {
       if (state.mode === 'preview') return;
@@ -448,15 +525,39 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
         log('error', error);
         return { ok: false, error };
       }
+      // Where the snippet lands (insertUsage defaults to root) — named in the
+      // mobile toast below.
+      const landedIn = target?.containerId ?? ROOT_ID;
       try {
         const doc = insertUsage(state.doc, usage, target);
         applyDoc(doc, `insert ${name}`);
+        // Contract §7b: on mobile every glossary insert (tap or grip drop)
+        // brings the canvas forward and confirms what landed where — `title`
+        // tooltips don't exist on touch, the toast carries the affordance.
+        if (state.mobile) {
+          if (state.mobileView !== 'canvas') set({ mobileView: 'canvas' });
+          actions.showToast(`${name} → #${landedIn}`);
+        }
         return { ok: true };
       } catch (err) {
         const error = errorMessage(err);
         log('error', `Insert ${name} failed: ${error}`);
         return { ok: false, error };
       }
+    },
+    insertFromDrag(name, target) {
+      if (target && target.containerId !== null) {
+        // Sidecar hit-test result: containerId/index already resolved catalog-side.
+        return actions.insertComponent(name, {
+          containerId: target.containerId,
+          index: target.index,
+        });
+      }
+      // Structural fallback (no sidecar / no hit): end of the container
+      // derived from the unified selection (contract §7).
+      return actions.insertComponent(name, {
+        containerId: insertTargetFor(state.doc, state.selectedComponentId),
+      });
     },
     applyJsonText(text) {
       try {
@@ -576,15 +677,23 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       }
     },
 
-    selectComponent(id) {
+    selectComponent(id, opts) {
       if (id !== null && !state.doc.components.some((c) => c.id === id)) {
         return; // stale id (race with a re-render) — keep the current selection
       }
       // Selecting a component brings the Design inspector forward; manual tab
       // clicks stick until the next selection. Deselecting leaves the tab.
+      // On mobile the same selection also switches the single-column view to
+      // Design (contract §7b) unless the caller opts out (MOVE_START must
+      // keep the canvas visible for the in-flight §4e gesture).
+      const autoView = opts?.autoView !== false;
       const patch: Partial<ComposerState> =
         id !== null
-          ? { selectedComponentId: id, rightTab: 'design' }
+          ? {
+              selectedComponentId: id,
+              rightTab: 'design',
+              ...(state.mobile && autoView ? { mobileView: 'design' as MobileView } : {}),
+            }
           : { selectedComponentId: null };
       set(patch);
       port?.sendSetSelection({ id });
@@ -611,6 +720,34 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     },
     setSettingsOpen(open) {
       set({ settingsOpen: open });
+    },
+
+    setMobile(mobile) {
+      if (state.mobile !== mobile) set({ mobile });
+    },
+    setMobileView(view) {
+      // The Design/Chat views ARE the right-sidebar tab contents shown
+      // full-screen; keep rightTab in sync so the correct panel is visible
+      // (both panels stay mounted, exactly as on desktop).
+      const patch: Partial<ComposerState> = { mobileView: view };
+      if (view === 'design' || view === 'chat') patch.rightTab = view;
+      set(patch);
+    },
+    showToast(message) {
+      const toast: ToastState = { id: ++toastId, message };
+      if (toastTimer !== null) clearTimeout(toastTimer);
+      set({ toast }); // one at a time: a new toast replaces the previous one
+      toastTimer = setTimeout(() => {
+        toastTimer = null;
+        if (state.toast !== null && state.toast.id === toast.id) set({ toast: null });
+      }, TOAST_DURATION_MS);
+    },
+    dismissToast() {
+      if (toastTimer !== null) {
+        clearTimeout(toastTimer);
+        toastTimer = null;
+      }
+      if (state.toast !== null) set({ toast: null });
     },
 
     setTheme(theme) {
@@ -654,6 +791,10 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     attachPort(nextPort) {
       port = nextPort;
     },
+    attachCanvasDnd(surface) {
+      canvasDnd = surface;
+    },
+    getCanvasDnd: () => canvasDnd,
     actions,
   };
 }

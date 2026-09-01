@@ -131,7 +131,9 @@ button:focus-visible {
 .app {
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr) 330px;
+  /* Mobile URL bars: dvh tracks the real visible height; vh is the fallback. */
   height: 100vh;
+  height: 100dvh;
 }
 .app.glossary-collapsed {
   grid-template-columns: 42px minmax(0, 1fr) 330px;
@@ -1238,4 +1240,235 @@ button.danger:hover:not(:disabled) {
   align-items: center;
   gap: 8px;
   font-weight: 400;
+}
+
+/* ================= Mobile (contract §7b) =================
+   Breakpoint 900px — keep in sync with MOBILE_BREAKPOINT_PX in
+   src/lib/viewport.ts. Everything below the base rules lives inside the
+   media query, so the ≥900px desktop layout is pixel-identical. */
+
+/* Per-tile drag grip: hidden on desktop, a ≥44px pointer-drag handle on
+   mobile. touch-action none is on the GRIP only — the tile body keeps
+   pan-y so the glossary list still scrolls under a thumb. */
+.glossary-item {
+  position: relative;
+}
+.glossary-grip {
+  display: none;
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  cursor: grab;
+}
+.glossary-grip:active {
+  cursor: grabbing;
+}
+.grip-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.glossary-grip:hover .grip-glyph {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Floating tile ghost that follows the pointer during a grip drag. */
+.glossary-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 50;
+  width: 112px;
+  transform: translate(-50%, -55%);
+  pointer-events: none;
+  opacity: 0.92;
+  filter: drop-shadow(0 6px 14px rgb(0 0 0 / 30%));
+}
+.glossary-drag-ghost .glossary-tile {
+  border: 1px solid var(--accent);
+}
+
+/* Insert toast (mtoast): confirms what landed where on touch, where the
+   title-attribute tooltips of the desktop UI don't exist. */
+.mtoast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(64px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 40;
+  background: var(--ink);
+  color: var(--bg);
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-size: 0.85rem;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 25%);
+  max-width: calc(100vw - 32px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Bottom tab bar: hidden ≥900px, fixed ≤900px. */
+.mobile-tabbar {
+  display: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.mobile-tabbar button {
+  flex: 1 1 0;
+  min-height: 48px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.mobile-tabbar button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+@media (max-width: 900px) {
+  /* Single-column app: the three panes are absolutely stacked above the tab
+     bar; exactly one is visible. Panes hide with CSS visibility ONLY — the
+     canvas pane and its renderer iframe stay mounted AND laid out, so the
+     bridge handshake never replays and in-flight pointer captures (grip
+     drag, §4e canvas move) keep streaming events. .app overflow:hidden
+     guarantees no page-level horizontal scroll. */
+  .app,
+  .app.glossary-collapsed {
+    display: block;
+    position: relative;
+    overflow: hidden;
+  }
+  .app > .glossary,
+  .app > .canvas-pane,
+  .app > .sidebar {
+    position: absolute;
+    inset: 0;
+    bottom: calc(48px + env(safe-area-inset-bottom));
+    border-left: none;
+    border-right: none;
+  }
+  .app:not(.mobile-view-canvas) > .canvas-pane,
+  .app:not(.mobile-view-add) > .glossary,
+  .app:not(.mobile-view-design):not(.mobile-view-chat) > .sidebar {
+    visibility: hidden;
+  }
+  .mobile-tabbar {
+    display: flex;
+  }
+  /* The bottom bar replaces the sidebar's own tab strip. */
+  .sidebar-tabs {
+    display: none;
+  }
+  /* Full-width Add view: thumb-sized tile grid, grips shown, tile body
+     keeps vertical panning so the list scrolls. */
+  .glossary-grid {
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  }
+  .glossary-grip {
+    display: flex;
+  }
+  .glossary-tile {
+    touch-action: pan-y;
+  }
+  /* Collapsing the glossary makes no sense when it IS the Add view. */
+  .glossary-collapse {
+    display: none;
+  }
+  .glossary.collapsed {
+    align-items: stretch;
+    padding-top: 0;
+  }
+  .glossary.collapsed .glossary-expand {
+    min-height: 48px;
+  }
+
+  /* --- Sizing hygiene --- */
+  /* iOS zooms into any focused control under 16px: every input, select and
+     textarea (incl. the mono JSON editors) gets 16px on mobile. */
+  input,
+  select,
+  textarea,
+  .json-editor,
+  .prop-json {
+    font-size: 16px;
+  }
+  /* ≥44px hit areas via padding — visuals stay compact. */
+  button {
+    min-height: 44px;
+  }
+  .icon-button {
+    min-width: 44px;
+  }
+  .mode-toggle button {
+    padding: 4px 14px;
+  }
+  /* The toolbar compacts by scrolling within its own strip — the page
+     itself never scrolls horizontally. */
+  .toolbar {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: thin;
+  }
+  .toolbar > button,
+  .toolbar .mode-toggle,
+  .toolbar .icon-button {
+    flex: none;
+  }
+  .renderer-url {
+    flex: none;
+    max-width: 180px;
+  }
+  /* Tree rows: 44px tap targets, centered content. */
+  .tree-node {
+    align-items: center;
+    padding: 4px 10px;
+  }
+  .canvas-scroll {
+    padding: 8px;
+  }
+  .drawer-body {
+    height: min(230px, 40dvh);
+  }
+  /* Settings modal renders full-screen under the breakpoint, above the tab
+     bar (z 30) and toast (z 40), clear of the home-indicator inset. */
+  .modal-backdrop {
+    align-items: stretch;
+    z-index: 60;
+  }
+  .modal {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+    overflow-y: auto;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
 }

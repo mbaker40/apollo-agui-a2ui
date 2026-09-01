@@ -104,6 +104,28 @@ export function CanvasPane() {
     });
   };
 
+  // The glossary's pointer-based grip drag (contract §7b) drives the SAME
+  // COMPOSERX_DND_HOVER/END + held-DND_TARGET path as the HTML5 overlay:
+  // hoverAt converts viewport coords by subtracting the iframe bounding rect,
+  // exactly like onOverlayDragOver below. Only refs are touched, so the
+  // registration can stay mounted for the pane's lifetime.
+  useEffect(() => {
+    store.attachCanvasDnd({
+      getIframeRect: () => iframeRef.current?.getBoundingClientRect() ?? null,
+      hoverAt: (clientX, clientY) => {
+        const rect = iframeRef.current?.getBoundingClientRect();
+        if (rect) sendHover(clientX - rect.left, clientY - rect.top);
+      },
+      endHover: () => {
+        hostRef.current?.sendDndEnd();
+        dndTargetRef.current = null;
+      },
+      currentTarget: () => dndTargetRef.current,
+    });
+    return () => store.attachCanvasDnd(null);
+    // sendHover is re-created per render but closes over stable refs only.
+  }, [store]);
+
   const onOverlayDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
@@ -122,21 +144,8 @@ export function CanvasPane() {
     const name = e.dataTransfer.getData(DRAG_MIME);
     store.actions.setDragging(false);
     if (!name) return;
-    const target = dndTargetRef.current;
-    if (target && target.containerId) {
-      // Sidecar hit-test result: containerId/index already resolved catalog-side.
-      store.actions.insertComponent(name, {
-        containerId: target.containerId,
-        index: target.index,
-      });
-    } else {
-      // Structural fallback (no sidecar / no hit): end of the container
-      // derived from the unified selection (contract §7).
-      const s = store.getState();
-      store.actions.insertComponent(name, {
-        containerId: insertTargetFor(s.doc, s.selectedComponentId),
-      });
-    }
+    // Held-target-or-structural-fallback logic shared with the grip drag.
+    store.actions.insertFromDrag(name, dndTargetRef.current);
     hostRef.current?.sendDndEnd();
     dndTargetRef.current = null;
   };

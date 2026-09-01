@@ -209,3 +209,21 @@ the same way:
   insertion indicator shown (`composer-tree-drag.png`); dragging the Card
   onto its own child Column rendered no-drop and the refused drop left
   the document byte-identical.
+
+### Mobile web addendum
+
+Audit at a phone viewport (390×844, DPR 3, touch) found the canvas/iframe
+collapsed to 0px (fixed 250px + 330px panels), 190px horizontal page
+scroll, tap targets under 44px, sub-16px inputs, `100vh`, and HTML5 drag
+never firing from touch. After the §7b implementation, the same emulation
+passes 8 live checks: no horizontal scroll with a full-width (372px)
+iframe and the four-tab bar; all views reachable with the renderer iframe
+KEPT AS THE SAME DOM NODE across switches (no handshake replay); drawer
+default-closed; tap-to-insert with the "Button → #root" toast and
+auto-switch to Canvas; **positional insert via the tile drag-grip's
+pointer gesture** (ghost, live dashed indicators over the canvas, sidecar
+target honored); the §4e canvas-move press-drag reorder working in the
+mobile layout; canvas tap-select opening the Design view; all inputs at
+16px (no iOS zoom-on-focus). Screenshots:
+`composer-mobile-{canvas,add,grip-drag,design}.png`. Composer suite now
+255 vitest tests. Tree-row drag remains desktop-only (documented).

@@ -163,6 +163,50 @@ input/textarea/select and while the settings modal is open):
 | `Escape`               | Deselect                                           |
 | `Delete` / `Backspace` | Delete the selection (when the delete rules allow) |
 
+## Mobile (≤900px)
+
+Under the 900px breakpoint (`MOBILE_BREAKPOINT_PX` in `src/lib/viewport.ts`,
+mirrored by the media query in `styles.css`) the shell becomes a
+single-column app driven by a fixed bottom tab bar — **Canvas · Add ·
+Design · Chat** (testids `mtab-canvas` … `mtab-chat`). The desktop three-pane
+layout is untouched at ≥900px.
+
+- **Views, not remounts.** Canvas keeps the full canvas pane (toolbar, tree,
+  iframe, drawer — the drawer starts **closed** on mobile); Add is the
+  glossary full-width; Design and Chat are the sidebar tabs as full-screen
+  views. Switching views only toggles CSS `visibility` on the always-mounted
+  panes, so the renderer iframe is never remounted and the bridge handshake
+  never replays. Selecting a component (canvas tap or tree tap)
+  auto-switches to the Design view, mirroring the desktop tab auto-switch.
+- **Tap to insert.** Tapping a glossary tile inserts into the derived insert
+  target (same rule as desktop clicks), auto-switches to the Canvas view,
+  and shows a ~2.5s toast (`mtoast`) naming what landed where ("Button →
+  #root") — tooltips don't exist on touch, the toast carries the
+  confirmation. Tap the toast to dismiss it early.
+- **Positional drag via grips.** Each tile shows a drag grip
+  (`glossary-grip-<Name>`, ≥44px hit area, `touch-action: none`; the tile
+  body keeps `pan-y` so the list still scrolls). Dragging the grip starts
+  immediately (no long-press): a tile ghost follows your finger, the app
+  switches to the Canvas view, and hovering the canvas drives the exact
+  same `COMPOSERX_DND_HOVER`/`DND_TARGET` precision-drop path as desktop
+  HTML5 drag — release over the canvas to insert at the highlighted
+  position (structural fallback unchanged without the sidecar), release
+  anywhere else to cancel. The grip drag also works with a mouse in a
+  narrow window; ≥900px the grips hide and HTML5 tile drag remains the
+  desktop path.
+- **Canvas move works under touch.** The §4e press-and-drag move of placed
+  components rides pointer events inside the renderer iframe, so it works
+  unchanged on mobile. The **layout-tree rows stay tap-select only** on
+  touch — HTML5 row drag remains desktop-only (HTML5 drag events never fire
+  from touch).
+- **Sizing.** App height uses `100dvh` (with a `100vh` fallback); all
+  inputs/selects/textareas are ≥16px on mobile (no iOS zoom-on-focus);
+  toolbar/tree/drawer controls get ≥44px hit areas, with the toolbar
+  scrolling horizontally within its own strip; the settings modal renders
+  full-screen; the tab bar is padded by `env(safe-area-inset-bottom)`
+  (enabled by `viewport-fit=cover` in `index.html`); the page itself never
+  scrolls horizontally.
+
 ## BYO renderer
 
 Any bridge-compatible renderer works: set its URL in Settings (persisted, the

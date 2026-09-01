@@ -386,3 +386,36 @@ describe('renderDropIndicator styling (contract 4b)', () => {
     expect(layer.childElementCount).toBe(0);
   });
 });
+
+describe('edit-mode class for empty-container drop zones', () => {
+  let originalParent: Window;
+
+  beforeEach(() => {
+    originalParent = window.parent;
+    Object.defineProperty(window, 'parent', {
+      configurable: true,
+      value: { postMessage: vi.fn() },
+    });
+    initComposerxSidecar();
+  });
+
+  afterEach(() => {
+    destroyComposerxSidecar();
+    document.documentElement.classList.remove('composerx-edit');
+    document.body.replaceChildren();
+    Object.defineProperty(window, 'parent', {
+      configurable: true,
+      value: originalParent,
+    });
+    vi.restoreAllMocks();
+  });
+
+  it('toggles composerx-edit on <html> with the mode', () => {
+    postFromHost({ type: COMPOSERX_SET_MODE, payload: { mode: 'edit' } });
+    expect(document.documentElement.classList.contains('composerx-edit')).toBe(true);
+    postFromHost({ type: COMPOSERX_SET_MODE, payload: { mode: 'preview' } });
+    expect(document.documentElement.classList.contains('composerx-edit')).toBe(false);
+    postFromHost({ type: COMPOSERX_SET_MODE, payload: { mode: 'edit' } });
+    expect(document.documentElement.classList.contains('composerx-edit')).toBe(true);
+  });
+});

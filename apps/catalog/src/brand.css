@@ -340,3 +340,20 @@ html body .material-symbols-outlined {
     'GRAD' 0,
     'opsz' 24;
 }
+
+/* ---------------------------------------- Empty-container drop zones -- */
+/* Edit mode only (the sidecar toggles .composerx-edit on <html>): an empty
+   Row/Column/List renders at near-zero size, which makes dropping back into
+   it impossible — give it a minimum dashed box so it stays visible AND
+   hit-testable (the box is real geometry, so elementsFromPoint finds it and
+   drops resolve 'into' the container). Preview mode renders untouched. */
+html.composerx-edit [data-a2ui-component='Column'] > :first-child:empty,
+html.composerx-edit [data-a2ui-component='Row'] > :first-child:empty,
+html.composerx-edit [data-a2ui-component='List'] > :first-child:empty {
+  min-height: 48px;
+  min-width: 48px;
+  outline: 1.5px dashed color-mix(in srgb, var(--brand-accent, #6d28d9) 45%, transparent);
+  outline-offset: -4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--brand-accent, #6d28d9) 4%, transparent);
+}

@@ -99,6 +99,14 @@ export const SIDECAR_VERSION = 4;
 
 export const DROP_INDICATOR_LAYER_ID = 'composerx-drop-indicator-layer';
 export const EDIT_VEIL_ID = 'composerx-edit-veil';
+/**
+ * Toggled on <html> while in edit mode. brand.css keys empty-container
+ * placeholder drop zones off it: an empty Row/Column/List renders at
+ * near-zero size, which makes it impossible to hit with a drop (especially
+ * a finger) — in edit mode it gets a minimum dashed box, giving both a
+ * visible affordance and real geometry for elementsFromPoint hit-testing.
+ */
+export const EDIT_MODE_CLASS = 'composerx-edit';
 export const HOVER_LAYER_ID = 'composerx-hover-layer';
 export const SELECTION_LAYER_ID = 'composerx-selection-layer';
 export const MOVE_LAYER_ID = 'composerx-move-layer';
@@ -1131,6 +1139,7 @@ function applyMode(): void {
     hoverPoint = null;
     clearLayer(HOVER_LAYER_ID);
   }
+  document.documentElement.classList.toggle(EDIT_MODE_CLASS, mode === 'edit');
   refreshSelectionOutline();
 }
 

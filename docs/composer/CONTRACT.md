@@ -206,6 +206,13 @@ Everything clears on `COMPOSERX_DND_END`. The layer stays
 `pointer-events: none`, `overflow: hidden`, and never affects
 `SURFACE_RESIZE`.
 
+**Empty-container drop zones**: an empty Row/Column/List renders at
+near-zero size, which would make dropping (back) into it impossible — so
+in edit mode (the sidecar toggles `composerx-edit` on `<html>`) empty
+children-array containers get a minimum 48px dashed placeholder box.
+The box is real geometry, so `elementsFromPoint` hit-testing resolves
+hovers `'into'` it like any container. Preview mode renders untouched.
+
 ### 4c. Selection + edit mode (sidecar v2)
 
 The canvas doubles as a live preview, so interactivity is modal. Composer →

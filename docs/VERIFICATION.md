@@ -227,3 +227,25 @@ mobile layout; canvas tap-select opening the Design view; all inputs at
 16px (no iOS zoom-on-focus). Screenshots:
 `composer-mobile-{canvas,add,grip-drag,design}.png`. Composer suite now
 255 vitest tests. Tree-row drag remains desktop-only (documented).
+
+### Selection overhaul addendum (ancestor honing + marquee/multi-select)
+
+- Units: composer 320 vitest tests (ancestor chain + repeat-tap cycling
+  walk/wrap/resets, breadcrumb/parent button, tree follow, selection-list
+  semantics, additive×cycling guards, marquee replace, group-delete
+  partition/subsumption/skip, SET_SELECTION {id, ids} sends), catalog 103
+  (marquee candidates topmost-intersecting rule, veil gesture matrix incl.
+  long-press-vs-lift arbitration, multi-outline rendering).
+- Live drive, 11 checks (desktop + phone emulation): repeat-click walked
+  label → Button → Column → Card at one spot; breadcrumb jump + parent
+  button; a background marquee drag drew the band with 2 live candidates
+  and selected both root siblings (2 outlines drawn iframe-side); group
+  delete removed both and ONE undo restored both; shift-click built an
+  additive pair; multi-panel Clear; on mobile two long-presses built a
+  2-selection without leaving the canvas view and a plain tap landed in
+  the Design view with the full breadcrumb for honing. Screenshots:
+  composer-marquee.png, composer-multiselect.png,
+  composer-mobile-multiselect.png.
+- Known interplay: on mobile, plain-tap auto-opens the Design view, so
+  repeat-tap cycling is effectively a desktop affordance — the breadcrumb
+  (which the tap lands on) is the mobile honing tool by design.

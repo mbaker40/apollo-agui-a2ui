@@ -74,8 +74,8 @@ fixtures, identity-header names, and recorded real-agent SSE transcripts.
 | `apps/web/`                  | React + Apollo Client 4.2 + raw `@ag-ui/client` chat, RefetchEventManager reconciliation | vitest (11)               |
 | `apps/android/`              | Thin Compose + Apollo Kotlin shell over the Kotlin core                                  | build locally             |
 | `apps/ios/`                  | Thin SwiftUI + Apollo iOS shell over the Swift core (XcodeGen)                           | build locally             |
-| `apps/composer/`             | Custom A2UI composer shell: glossary DnD, iframe canvas, JSON drawer, Anthropic chat     | vitest (255)              |
-| `apps/catalog/`              | Custom-styled A2UI basic-catalog renderer the composer iframes (+ DnD sidecar)           | vitest (77)               |
+| `apps/composer/`             | Custom A2UI composer shell: glossary DnD, iframe canvas, JSON drawer, Anthropic chat     | vitest (320)              |
+| `apps/catalog/`              | Custom-styled A2UI basic-catalog renderer the composer iframes (+ DnD sidecar)           | vitest (103)              |
 | `packages/a2ui-bridge/`      | Vendored renderer-side A2UI Preview Bridge (official composer repo, Apache-2.0)          | vendored — see its README |
 | `packages/chat-core-kotlin/` | Pure-JVM AG-UI core: SSE parser, session/tool loop, invalidation bus                     | JUnit (20)                |
 | `packages/chat-core-swift/`  | SwiftPM mirror of the Kotlin core, Linux-testable                                        | `swift test` locally      |

@@ -1,11 +1,11 @@
 /**
- * Host-document keyboard shortcuts (contract §7): Escape deselects,
- * Delete/Backspace removes the selection under the §5 rules. Both are
- * suppressed while focus sits in an editable control and while the settings
- * modal (which owns Escape) is open.
+ * Host-document keyboard shortcuts (contract §7): Escape clears the whole
+ * selection list, Delete/Backspace removes the selection under the §5/§4f
+ * group rules. Both are suppressed while focus sits in an editable control
+ * and while the settings modal (which owns Escape) is open.
  */
 import { useEffect } from 'react';
-import { ROOT_ID, singleSlotParentOf } from '../lib/surface-doc';
+import { partitionForDelete } from '../lib/surface-doc';
 import type { ComposerStore } from '../state/store';
 
 export function isEditableTarget(target: EventTarget | null): boolean {
@@ -21,16 +21,19 @@ export function handleShortcutKey(store: ComposerStore, e: KeyboardEvent): void 
   if (state.settingsOpen) return;
 
   if (e.key === 'Escape') {
-    if (state.selectedComponentId !== null) {
-      store.actions.selectComponent(null);
+    if (state.selectedComponentIds.length > 0) {
+      store.actions.clearSelection();
     }
     return;
   }
 
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    const id = state.selectedComponentId;
-    if (id === null || id === ROOT_ID) return;
-    if (singleSlotParentOf(state.doc, id) !== null) return; // §5: slot occupant
+    const ids = state.selectedComponentIds;
+    if (ids.length === 0) return;
+    // Same partition the group delete applies (§4f): when nothing in the
+    // selection is deletable (root / single-slot occupants only), stay a
+    // silent no-op — matching the disabled inspector button.
+    if (partitionForDelete(state.doc, ids).deletable.length === 0) return;
     e.preventDefault();
     store.actions.deleteSelected();
   }

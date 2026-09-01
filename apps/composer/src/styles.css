@@ -641,6 +641,16 @@ button:focus-visible {
 .tree-node.selected .tree-id {
   color: var(--accent);
 }
+/* Multi-select (contract §4f): every selected row highlights; non-primary
+   rows get a lighter SOLID border (dashed stays reserved for drop
+   indicators), the primary keeps the full-strength selected look. */
+.tree-node.selected:not(.primary) {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 60%, transparent);
+}
+.tree-node.selected.primary {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 .tree-type {
   font-weight: 600;
 }
@@ -1018,6 +1028,49 @@ button.danger:hover:not(:disabled) {
 .inspector-delete-hint {
   padding: 6px 12px 0;
   margin: 0;
+}
+/* Multi-selection inspector state (contract §4f): "N selected" header +
+   clickable `type #id` rows (click collapses the selection to that id). */
+.multi-list {
+  list-style: none;
+  margin: 0;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.multi-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  font-size: 0.78rem;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.multi-row:hover {
+  border-color: var(--accent);
+}
+.multi-row.primary {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.multi-primary-badge {
+  margin-left: auto;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.multi-note {
+  padding: 0 12px 12px;
+  margin: 0;
+  font-size: 0.74rem;
 }
 .prop-form {
   display: flex;

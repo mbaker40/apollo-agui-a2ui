@@ -26,19 +26,24 @@ interface TreeDnd {
 function TreeRow({ node, depth, dnd }: { node: TreeNode; depth: number; dnd: TreeDnd }) {
   const store = useStore();
   const state = useComposerState();
-  const selected = state.selectedComponentId === node.id;
+  // Multi-select (contract §4f): every row IN the selection list highlights;
+  // the primary (first id) reads stronger via the extra `primary` class.
+  const selected = state.selectedComponentIds.includes(node.id);
+  const primary = state.selectedComponentId === node.id;
   // Tree follows the selection (contract §7 ancestor honing): whenever this
-  // node BECOMES the selection — canvas tap, repeat-tap cycling step,
-  // breadcrumb, ↑ parent button — scroll it into view so the hierarchy is
-  // one glance away. block:'nearest' + no smooth behavior keeps it cheap and
-  // deterministic; jsdom has no scrollIntoView, hence the typeof guard.
+  // node BECOMES the primary selection — canvas tap, repeat-tap cycling
+  // step, breadcrumb, ↑ parent button — scroll it into view so the
+  // hierarchy is one glance away. Only the primary scrolls (scrolling every
+  // toggled row would make the tree jump around while building a
+  // multi-selection). block:'nearest' + no smooth behavior keeps it cheap
+  // and deterministic; jsdom has no scrollIntoView, hence the typeof guard.
   const nodeRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     const el = nodeRef.current;
-    if (selected && el && typeof el.scrollIntoView === 'function') {
+    if (primary && el && typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ block: 'nearest' });
     }
-  }, [selected]);
+  }, [primary]);
   const indicator = dnd.indicator?.rowId === node.id ? dnd.indicator : null;
   const showLineBefore = indicator?.valid === true && indicator.zone === 'before';
   const showLineAfter = indicator?.valid === true && indicator.zone === 'after';
@@ -67,16 +72,21 @@ function TreeRow({ node, depth, dnd }: { node: TreeNode; depth: number; dnd: Tre
           ref={nodeRef}
           className={`tree-node ${node.container ? 'container' : 'leaf'} ${
             selected ? 'selected' : ''
-          } ${dropInto ? 'drop-into' : ''}`}
+          } ${primary ? 'primary' : ''} ${dropInto ? 'drop-into' : ''}`}
           data-testid={`tree-node-${node.id}`}
           aria-pressed={selected}
           draggable={node.id !== ROOT_ID}
           title={
             node.container
-              ? `Select ${node.component} #${node.id} (children-array container — inserts land here)`
-              : `Select ${node.component} #${node.id}`
+              ? `Select ${node.component} #${node.id} (children-array container — inserts land here; shift-click toggles)`
+              : `Select ${node.component} #${node.id} (shift-click toggles)`
           }
-          onClick={() => store.actions.selectComponent(node.id)}
+          onClick={(e) => {
+            // Contract §4f: shift-click toggles the row in/out of the
+            // multi-selection; a plain click stays a replace select.
+            if (e.shiftKey) store.actions.toggleSelected(node.id);
+            else store.actions.selectComponent(node.id);
+          }}
           onDragStart={(e) => dnd.onRowDragStart(node, e)}
           onDragEnd={() => dnd.onRowDragEnd()}
         >
@@ -127,7 +137,9 @@ export function LayoutTree() {
       e.dataTransfer.setData(MOVE_MIME, node.id);
       e.dataTransfer.effectAllowed = 'move';
       draggedIdRef.current = node.id;
-      // Mirror the canvas move (§4e): lifting a component selects it.
+      // Mirror the canvas move (§4e): lifting a component selects it —
+      // and, per §4f, a tree drag started with a multi-selection first
+      // COLLAPSES it to the dragged row (selectComponent replaces the list).
       store.actions.selectComponent(node.id);
     },
     onRowDragEnd() {

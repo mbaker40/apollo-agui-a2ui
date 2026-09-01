@@ -15,6 +15,7 @@ import {
   moveComponent,
   nextGen,
   parseRenderMessages,
+  partitionForDelete,
   removeComponent,
   removeComponentProp,
   setComponentProp,
@@ -895,5 +896,63 @@ describe('ancestorChainOf', () => {
       { id: 'orphan', component: 'Text', text: 'x' },
     ]);
     expect(ancestorChainOf(doc, 'orphan')).toEqual(['orphan']);
+  });
+});
+
+describe('partitionForDelete (contract §4f group delete)', () => {
+  it('splits a selection into deletable / subsumed / skipped buckets', () => {
+    const doc = nestedDoc();
+    // card is deletable; inner is subsumed (its ancestor card is selected,
+    // through the child slot + children array); cardBody is subsumed too;
+    // txt is an independent deletable; paneA fills a Tabs slot → skipped.
+    expect(partitionForDelete(doc, ['card', 'inner', 'cardBody', 'txt', 'paneA'])).toEqual({
+      deletable: ['card', 'txt'],
+      subsumed: ['inner', 'cardBody'],
+      skipped: ['paneA'],
+    });
+  });
+
+  it('skips root and single-slot occupants when they are group roots', () => {
+    const doc = nestedDoc();
+    expect(partitionForDelete(doc, ['cardBody'])).toEqual({
+      deletable: [],
+      subsumed: [],
+      skipped: ['cardBody'], // Card child slot
+    });
+    expect(partitionForDelete(doc, [ROOT_ID])).toEqual({
+      deletable: [],
+      subsumed: [],
+      skipped: [ROOT_ID],
+    });
+  });
+
+  it('a selected root subsumes every other id', () => {
+    const doc = nestedDoc();
+    expect(partitionForDelete(doc, [ROOT_ID, 'card', 'txt'])).toEqual({
+      deletable: [],
+      subsumed: ['card', 'txt'],
+      skipped: [ROOT_ID],
+    });
+  });
+
+  it('drops stale ids from every bucket and keeps selection order', () => {
+    const doc = nestedDoc();
+    expect(partitionForDelete(doc, ['ghost', 'txt', 'card'])).toEqual({
+      deletable: ['txt', 'card'],
+      subsumed: [],
+      skipped: [],
+    });
+    expect(partitionForDelete(doc, [])).toEqual({ deletable: [], subsumed: [], skipped: [] });
+  });
+
+  it('subsumption follows slot edges: a slot occupant under a selected parent is subsumed, not skipped', () => {
+    const doc = nestedDoc();
+    // paneA alone would be skipped (Tabs slot); with tabs selected it is
+    // subsumed — deleting tabs takes the pane with it.
+    expect(partitionForDelete(doc, ['tabs', 'paneA'])).toEqual({
+      deletable: ['tabs'],
+      subsumed: ['paneA'],
+      skipped: [],
+    });
   });
 });

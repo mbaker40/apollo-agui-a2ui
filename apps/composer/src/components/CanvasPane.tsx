@@ -45,9 +45,11 @@ export function CanvasPane() {
     const host = new BridgeHost({
       getTheme: () => store.getState().settings.theme,
       getRenderItems: () => toRenderMessages(store.getState().doc),
-      // Mode + selection survive a renderer reload: re-sent post-RENDER_A2UI.
+      // Mode + selection survive a renderer reload: re-sent post-RENDER_A2UI
+      // (id = primary for v3 catalogs, ids = the full §4f list for v4).
       getMode: () => store.getState().mode,
       getSelection: () => store.getState().selectedComponentId,
+      getSelectionIds: () => store.getState().selectedComponentIds,
       onReady: () => {
         readyRef.current = true;
         store.actions.bridgeReady();
@@ -67,6 +69,7 @@ export function CanvasPane() {
         dndTargetRef.current = payload;
       },
       onSelect: (payload) => store.actions.bridgeSelect(payload),
+      onMarquee: (payload) => store.actions.bridgeMarquee(payload),
       onPropSpecs: (payload) => store.actions.bridgePropSpecs(payload),
       onMoveStart: (payload) => store.actions.bridgeMoveStart(payload),
       onMoveDrop: (payload) => store.actions.bridgeMoveDrop(payload),

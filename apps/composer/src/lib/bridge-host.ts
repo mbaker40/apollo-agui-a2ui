@@ -24,16 +24,18 @@ export const COMPOSERX_DND_TARGET = 'COMPOSERX_DND_TARGET';
 export const COMPOSERX_SET_MODE = 'COMPOSERX_SET_MODE';
 export const COMPOSERX_SET_SELECTION = 'COMPOSERX_SET_SELECTION';
 export const COMPOSERX_SELECT = 'COMPOSERX_SELECT';
+export const COMPOSERX_MARQUEE = 'COMPOSERX_MARQUEE';
 export const COMPOSERX_PROP_SPECS = 'COMPOSERX_PROP_SPECS';
 export const COMPOSERX_MOVE_START = 'COMPOSERX_MOVE_START';
 export const COMPOSERX_MOVE_DROP = 'COMPOSERX_MOVE_DROP';
 export const COMPOSERX_MOVE_CANCEL = 'COMPOSERX_MOVE_CANCEL';
 
-/** Sidecar feature names (contract §4/§4c/§4d/§4e) — check the array, not the version. */
+/** Sidecar feature names (contract §4/§4c/§4d/§4e/§4f) — check the array, not the version. */
 export const SIDECAR_FEATURE_DND = 'dnd-hittest';
 export const SIDECAR_FEATURE_SELECT = 'select';
 export const SIDECAR_FEATURE_PROP_SPECS = 'prop-specs';
 export const SIDECAR_FEATURE_MOVE = 'move';
+export const SIDECAR_FEATURE_MULTI_SELECT = 'multi-select';
 
 export interface SidecarReadyPayload {
   features: string[];
@@ -62,6 +64,49 @@ export interface SetModePayload {
 export interface SelectionPayload {
   /** null = no selection (background click / deselect). */
   id: string | null;
+  /**
+   * COMPOSERX_SELECT only (§4f): true = additive toggle (shift-click, or a
+   * ~350ms touch long-press). Absent/false = plain replace select. A v3
+   * catalog never sends the field.
+   */
+  additive?: boolean;
+}
+
+/**
+ * COMPOSERX_SET_SELECTION (composer → catalog): `id` stays the primary for
+ * back-compat (a v3 catalog outlines just it); `ids` is the full ordered
+ * selection list a v4 catalog multi-outlines (§4f).
+ */
+export interface SetSelectionPayload {
+  id: string | null;
+  ids?: string[];
+}
+
+/** COMPOSERX_MARQUEE (§4f): topmost-intersecting candidate ids ([] clears). */
+export interface MarqueePayload {
+  ids: string[];
+}
+
+/**
+ * Shape check for COMPOSERX_SELECT payloads; null = malformed, drop it.
+ * `id` must be a string or an explicit null (background tap). A non-boolean
+ * `additive` is tolerated as "plain" rather than dropping the user's click —
+ * the flag is an enhancement, not the message.
+ */
+export function parseSelectPayload(payload: unknown): SelectionPayload | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const { id, additive } = payload as Record<string, unknown>;
+  if (typeof id !== 'string' && id !== null) return null;
+  return additive === true ? { id, additive: true } : { id };
+}
+
+/** Shape check for MARQUEE payloads (array of strings); null = malformed, drop it. */
+export function parseMarqueePayload(payload: unknown): MarqueePayload | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const ids = (payload as { ids?: unknown }).ids;
+  if (!Array.isArray(ids)) return null;
+  if (!ids.every((entry): entry is string => typeof entry === 'string')) return null;
+  return { ids };
 }
 
 /** One inspector-form prop derived catalog-side from the zod schemas (§4d). */
@@ -153,8 +198,15 @@ export interface BridgeHostCallbacks {
    * SET_MODE is re-sent and the sidecar's default ('edit') applies.
    */
   getMode?(): ComposerMode;
-  /** Current selection, read at handshake time (re-sent after RENDER_A2UI). */
+  /** Current primary selection, read at handshake time (re-sent after RENDER_A2UI). */
   getSelection?(): string | null;
+  /**
+   * Current full selection list (§4f), read at handshake time. Optional and
+   * only consulted when getSelection is also provided; when present the
+   * re-sent SET_SELECTION carries `{id, ids}` so a v4 catalog re-anchors
+   * every outline after a renderer reload.
+   */
+  getSelectionIds?(): string[];
   onReady?(): void;
   onCatalog?(payload: CatalogHandshakePayload): void;
   onUsages?(payload: ComponentUsages): void;
@@ -164,8 +216,10 @@ export interface BridgeHostCallbacks {
   onSurfaceResize?(payload: SurfaceResizePayload): void;
   onSidecarReady?(payload: SidecarReadyPayload): void;
   onDndTarget?(payload: DndTargetPayload): void;
-  /** COMPOSERX_SELECT from the sidecar: deepest hit id, or null for background. */
+  /** COMPOSERX_SELECT from the sidecar: deepest hit id (+ additive flag, §4f), or null. */
   onSelect?(payload: SelectionPayload): void;
+  /** COMPOSERX_MARQUEE from the sidecar (§4f): replace the selection with these ids. */
+  onMarquee?(payload: MarqueePayload): void;
   /** COMPOSERX_PROP_SPECS from the sidecar (§4d). */
   onPropSpecs?(payload: PropSpecsPayload): void;
   /** COMPOSERX_MOVE_START (§4e): a canvas move gesture lifted this component. */
@@ -243,8 +297,8 @@ export class BridgeHost {
     this.send({ type: COMPOSERX_SET_MODE, payload });
   }
 
-  /** Queued like other non-DND messages until the renderer is ready (§4c). */
-  sendSetSelection(payload: SelectionPayload): void {
+  /** Queued like other non-DND messages until the renderer is ready (§4c/§4f). */
+  sendSetSelection(payload: SetSelectionPayload): void {
     this.send({ type: COMPOSERX_SET_SELECTION, payload });
   }
 
@@ -312,9 +366,18 @@ export class BridgeHost {
       case COMPOSERX_DND_TARGET:
         this.callbacks.onDndTarget?.(payload as DndTargetPayload);
         break;
-      case COMPOSERX_SELECT:
-        this.callbacks.onSelect?.(payload as SelectionPayload);
+      // SELECT/MARQUEE drive the selection list (§4f), so like MOVE_* they
+      // are shape-checked here; malformed payloads are dropped silently.
+      case COMPOSERX_SELECT: {
+        const select = parseSelectPayload(payload);
+        if (select) this.callbacks.onSelect?.(select);
         break;
+      }
+      case COMPOSERX_MARQUEE: {
+        const marquee = parseMarqueePayload(payload);
+        if (marquee) this.callbacks.onMarquee?.(marquee);
+        break;
+      }
       case COMPOSERX_PROP_SPECS:
         this.callbacks.onPropSpecs?.(payload as PropSpecsPayload);
         break;
@@ -365,9 +428,11 @@ export class BridgeHost {
       this.post({ type: COMPOSERX_SET_MODE, payload: { mode: this.callbacks.getMode() } });
     }
     if (this.callbacks.getSelection) {
+      const id = this.callbacks.getSelection();
+      const ids = this.callbacks.getSelectionIds?.();
       this.post({
         type: COMPOSERX_SET_SELECTION,
-        payload: { id: this.callbacks.getSelection() },
+        payload: ids !== undefined ? { id, ids } : { id },
       });
     }
   }

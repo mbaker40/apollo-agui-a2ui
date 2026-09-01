@@ -706,6 +706,44 @@ export function ancestorChainOf(doc: SurfaceDoc, id: string): string[] {
   return chain;
 }
 
+export interface DeletePartition {
+  /** Ids removeComponent can take, in selection order (subsumed ids excluded). */
+  deletable: string[];
+  /** Ids covered by a selected ancestor — deleting the ancestor deletes them. */
+  subsumed: string[];
+  /** Ids that survive a group delete: root, and single-slot occupants (§5). */
+  skipped: string[];
+}
+
+/**
+ * Splits a selection into what a group delete (contract §4f) actually
+ * removes: ids whose PROPER ancestor (ancestorChainOf, so children arrays
+ * AND single slots) is also selected are subsumed — their selected ancestor's
+ * removal takes the whole subtree, so deleting them separately would either
+ * throw (slot occupants) or double-count; of the remaining group roots,
+ * `root` and single-slot occupants are skipped (same §5 rules as the single
+ * delete), and the rest are deletable. Unknown/stale ids are dropped
+ * entirely (they appear in no bucket). Pure; the doc is never touched.
+ */
+export function partitionForDelete(doc: SurfaceDoc, ids: string[]): DeletePartition {
+  const selected = new Set(ids);
+  const deletable: string[] = [];
+  const subsumed: string[] = [];
+  const skipped: string[] = [];
+  for (const id of ids) {
+    const chain = ancestorChainOf(doc, id);
+    if (chain.length === 0) continue; // stale id — not in the doc at all
+    if (chain.slice(1).some((ancestor) => selected.has(ancestor))) {
+      subsumed.push(id);
+    } else if (id === ROOT_ID || singleSlotParentOf(doc, id) !== null) {
+      skipped.push(id);
+    } else {
+      deletable.push(id);
+    }
+  }
+  return { deletable, subsumed, skipped };
+}
+
 /**
  * Where a glossary insert goes given the current selection (contract §7):
  * the selected component itself if it is a children-array container, else

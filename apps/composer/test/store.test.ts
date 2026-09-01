@@ -1,24 +1,33 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { RenderA2uiItem } from 'a2ui-bridge/messages';
+import type { SetSelectionPayload } from '../src/lib/bridge-host';
 import type { Theme } from '../src/lib/settings';
-import { SURFACE_ID, emptyDoc, toRenderMessages } from '../src/lib/surface-doc';
+import type { SurfaceDoc } from '../src/lib/surface-doc';
+import { CATALOG_ID, SURFACE_ID, emptyDoc, toRenderMessages } from '../src/lib/surface-doc';
+import type { ComposerStoreOptions } from '../src/state/store';
 import { EVENT_LOG_LIMIT, UNDO_LIMIT, createComposerStore } from '../src/state/store';
 
 const TEXT_USAGE = { usage: [{ id: 'root', component: 'Text', text: 'hello' }] };
 
-function makeStore() {
+function makeStore(options: ComposerStoreOptions = {}) {
   const sentRenders: RenderA2uiItem[][] = [];
   const sentThemes: Theme[] = [];
   const sentModes: string[] = [];
   const sentSelections: (string | null)[] = [];
-  const store = createComposerStore();
+  // Full §4f payloads ({id: primary, ids: list}); sentSelections keeps the
+  // primary-only view the single-selection assertions were written against.
+  const sentSelectionPayloads: SetSelectionPayload[] = [];
+  const store = createComposerStore(options);
   store.attachPort({
     sendRender: (items) => sentRenders.push(items),
     sendTheme: (theme) => sentThemes.push(theme),
     sendSetMode: ({ mode }) => sentModes.push(mode),
-    sendSetSelection: ({ id }) => sentSelections.push(id),
+    sendSetSelection: (payload) => {
+      sentSelections.push(payload.id);
+      sentSelectionPayloads.push(structuredClone(payload));
+    },
   });
-  return { store, sentRenders, sentThemes, sentModes, sentSelections };
+  return { store, sentRenders, sentThemes, sentModes, sentSelections, sentSelectionPayloads };
 }
 
 beforeEach(() => {
@@ -561,5 +570,303 @@ describe('repeat-tap ancestor cycling (contract §7 ancestor honing)', () => {
     store.actions.setMode('preview');
     store.actions.bridgeSelect({ id: 'welcome-cta-label' });
     expect(store.getState().selectedComponentId).toBeNull();
+  });
+});
+
+describe('multi-select (contract §4f)', () => {
+  function ids(store: ReturnType<typeof makeStore>['store']) {
+    return store.getState().selectedComponentIds;
+  }
+  function primary(store: ReturnType<typeof makeStore>['store']) {
+    return store.getState().selectedComponentId;
+  }
+
+  it('toggleSelected adds at the end, removes, and promotes the next primary', () => {
+    const { store, sentSelectionPayloads } = makeStore();
+    store.actions.toggleSelected('welcome-title');
+    expect(ids(store)).toEqual(['welcome-title']);
+    expect(primary(store)).toBe('welcome-title');
+
+    store.actions.toggleSelected('welcome-text');
+    expect(ids(store)).toEqual(['welcome-title', 'welcome-text']);
+    expect(primary(store)).toBe('welcome-title'); // primary stays the first
+
+    store.actions.toggleSelected('welcome-title'); // remove the primary
+    expect(ids(store)).toEqual(['welcome-text']);
+    expect(primary(store)).toBe('welcome-text'); // next id promoted
+
+    store.actions.toggleSelected('welcome-text'); // remove the last
+    expect(ids(store)).toEqual([]);
+    expect(primary(store)).toBeNull();
+
+    // Every change re-sent {id: primary, ids: full list}.
+    expect(sentSelectionPayloads).toEqual([
+      { id: 'welcome-title', ids: ['welcome-title'] },
+      { id: 'welcome-title', ids: ['welcome-title', 'welcome-text'] },
+      { id: 'welcome-text', ids: ['welcome-text'] },
+      { id: null, ids: [] },
+    ]);
+  });
+
+  it('toggleSelected ignores ids that are not in the doc', () => {
+    const { store, sentSelectionPayloads } = makeStore();
+    store.actions.toggleSelected('welcome-title');
+    store.actions.toggleSelected('no-such-id');
+    expect(ids(store)).toEqual(['welcome-title']);
+    expect(sentSelectionPayloads).toHaveLength(1);
+  });
+
+  it('setSelection replaces the list, dedupes, and filters stale ids', () => {
+    const { store, sentSelectionPayloads } = makeStore();
+    store.actions.selectComponent('welcome-cta');
+    store.actions.setSelection([
+      'welcome-text',
+      'ghost',
+      'welcome-text', // duplicate — first occurrence wins
+      'welcome-title',
+    ]);
+    expect(ids(store)).toEqual(['welcome-text', 'welcome-title']);
+    expect(primary(store)).toBe('welcome-text');
+    expect(sentSelectionPayloads.at(-1)).toEqual({
+      id: 'welcome-text',
+      ids: ['welcome-text', 'welcome-title'],
+    });
+    store.actions.setSelection([]); // marquee [] clears
+    expect(ids(store)).toEqual([]);
+    expect(sentSelectionPayloads.at(-1)).toEqual({ id: null, ids: [] });
+  });
+
+  it('a plain selectComponent collapses any multi-selection to [id]', () => {
+    const { store } = makeStore();
+    store.actions.toggleSelected('welcome-title');
+    store.actions.toggleSelected('welcome-text');
+    store.actions.selectComponent('welcome-cta');
+    expect(ids(store)).toEqual(['welcome-cta']);
+    store.actions.selectComponent(null);
+    expect(ids(store)).toEqual([]);
+  });
+
+  it('every selectComponent send carries {id, ids} (single and null alike)', () => {
+    const { store, sentSelectionPayloads } = makeStore();
+    store.actions.selectComponent('welcome-card');
+    store.actions.selectComponent(null);
+    expect(sentSelectionPayloads).toEqual([
+      { id: 'welcome-card', ids: ['welcome-card'] },
+      { id: null, ids: [] },
+    ]);
+  });
+
+  it('bridgeSelect with additive toggles — it never cycles', () => {
+    const { store } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label', additive: true });
+    expect(ids(store)).toEqual(['welcome-cta-label']);
+    // A second additive tap on the SAME id removes it — a plain repeat tap
+    // would have cycled to the ancestor instead.
+    store.actions.bridgeSelect({ id: 'welcome-cta-label', additive: true });
+    expect(ids(store)).toEqual([]);
+    store.actions.bridgeSelect({ id: 'welcome-title', additive: true });
+    store.actions.bridgeSelect({ id: 'welcome-text', additive: true });
+    expect(ids(store)).toEqual(['welcome-title', 'welcome-text']);
+  });
+
+  it('a multi-selection makes the next plain tap a fresh select (no cycling)', () => {
+    const { store } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' }); // plain, seeds the cycle
+    store.actions.bridgeSelect({ id: 'welcome-text', additive: true }); // now 2 selected
+    expect(ids(store)).toEqual(['welcome-cta-label', 'welcome-text']);
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' }); // plain again
+    // Fresh replace with the deepest hit — NOT a hop to welcome-cta.
+    expect(ids(store)).toEqual(['welcome-cta-label']);
+    // And the fresh select re-seeds the cycle: the next repeat tap hones.
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    expect(ids(store)).toEqual(['welcome-cta']);
+  });
+
+  it('an additive tap resets the repeat-tap seed even when one id remains', () => {
+    const { store } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' }); // plain, seeds the cycle
+    store.actions.bridgeSelect({ id: 'welcome-title', additive: true });
+    store.actions.bridgeSelect({ id: 'welcome-title', additive: true }); // back to 1 selected
+    expect(ids(store)).toEqual(['welcome-cta-label']);
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' }); // plain tap on the old spot
+    // Without the additive reset this would have cycled to welcome-cta.
+    expect(ids(store)).toEqual(['welcome-cta-label']);
+  });
+
+  it('bridgeMarquee replaces the list and is ignored in preview mode', () => {
+    const { store, sentSelectionPayloads } = makeStore();
+    store.actions.bridgeMarquee({ ids: ['welcome-title', 'welcome-text'] });
+    expect(ids(store)).toEqual(['welcome-title', 'welcome-text']);
+    expect(sentSelectionPayloads.at(-1)).toEqual({
+      id: 'welcome-title',
+      ids: ['welcome-title', 'welcome-text'],
+    });
+    store.actions.setMode('preview');
+    store.actions.bridgeMarquee({ ids: ['welcome-cta'] });
+    expect(ids(store)).toEqual(['welcome-title', 'welcome-text']); // retained
+    store.actions.setMode('edit');
+    store.actions.bridgeMarquee({ ids: [] }); // [] clears
+    expect(ids(store)).toEqual([]);
+  });
+
+  it('after a marquee, a plain tap is a fresh select (multi blocks cycling)', () => {
+    const { store } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' }); // cycled to welcome-cta
+    expect(primary(store)).toBe('welcome-cta');
+    store.actions.bridgeMarquee({ ids: ['welcome-title', 'welcome-text'] });
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    expect(ids(store)).toEqual(['welcome-cta-label']); // fresh, not welcome-body
+  });
+
+  it('clearSelection and a background tap clear the whole list', () => {
+    const { store, sentSelectionPayloads } = makeStore();
+    store.actions.toggleSelected('welcome-title');
+    store.actions.toggleSelected('welcome-text');
+    store.actions.clearSelection();
+    expect(ids(store)).toEqual([]);
+    expect(sentSelectionPayloads.at(-1)).toEqual({ id: null, ids: [] });
+
+    store.actions.toggleSelected('welcome-title');
+    store.actions.toggleSelected('welcome-text');
+    store.actions.bridgeSelect({ id: null }); // background tap
+    expect(ids(store)).toEqual([]);
+  });
+
+  it('doc changes filter the list, keeping order and promoting the first survivor', () => {
+    const { store, sentSelectionPayloads } = makeStore();
+    store.actions.setSelection(['welcome-title', 'welcome-text', 'welcome-card']);
+    // Replace the doc with one that keeps welcome-text + welcome-card only.
+    const slim: SurfaceDoc = {
+      surfaceId: SURFACE_ID,
+      catalogId: CATALOG_ID,
+      components: [
+        { id: 'root', component: 'Column', children: ['welcome-card'] },
+        { id: 'welcome-card', component: 'Card', child: 'welcome-text' },
+        { id: 'welcome-text', component: 'Text', text: 'kept' },
+      ],
+      dataModel: {},
+    };
+    const result = store.actions.applyChatItems(toRenderMessages(slim));
+    expect(result.ok).toBe(true);
+    expect(ids(store)).toEqual(['welcome-text', 'welcome-card']);
+    expect(primary(store)).toBe('welcome-text');
+    expect(sentSelectionPayloads.at(-1)).toEqual({
+      id: 'welcome-text',
+      ids: ['welcome-text', 'welcome-card'],
+    });
+  });
+
+  it('toggling on mobile switches the sidebar tab but never hides the canvas', () => {
+    const { store } = makeStore({ mobile: true });
+    store.actions.setRightTab('chat');
+    store.actions.toggleSelected('welcome-title');
+    expect(store.getState().rightTab).toBe('design');
+    expect(store.getState().mobileView).toBe('canvas'); // long-press flow stays on canvas
+    store.actions.bridgeMarquee({ ids: ['welcome-title', 'welcome-text'] });
+    expect(store.getState().mobileView).toBe('canvas');
+  });
+});
+
+describe('group delete (contract §4f)', () => {
+  // root Column [card(Card → cardBody Column [inner]), txt, txt2]
+  function groupDoc(): SurfaceDoc {
+    return {
+      surfaceId: SURFACE_ID,
+      catalogId: CATALOG_ID,
+      components: [
+        { id: 'root', component: 'Column', children: ['card', 'txt', 'txt2'] },
+        { id: 'card', component: 'Card', child: 'cardBody' },
+        { id: 'cardBody', component: 'Column', children: ['inner'] },
+        { id: 'inner', component: 'Text', text: 'inner' },
+        { id: 'txt', component: 'Text', text: 'a' },
+        { id: 'txt2', component: 'Text', text: 'b' },
+      ],
+      dataModel: {},
+    };
+  }
+  function docIds(store: ReturnType<typeof makeStore>['store']) {
+    return store.getState().doc.components.map((c) => c.id);
+  }
+
+  it('deletes several selected components in ONE undo snapshot + one re-render', () => {
+    const { store, sentRenders } = makeStore({ doc: groupDoc() });
+    store.actions.setSelection(['txt', 'txt2']);
+    const result = store.actions.deleteSelected();
+    expect(result.ok).toBe(true);
+    expect(docIds(store)).toEqual(['root', 'card', 'cardBody', 'inner']);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(sentRenders).toHaveLength(1);
+    expect(store.getState().selectedComponentIds).toEqual([]); // all deleted → cleared
+    store.actions.undo(); // one step restores everything
+    expect(docIds(store)).toEqual(['root', 'card', 'cardBody', 'inner', 'txt', 'txt2']);
+  });
+
+  it('subsumes descendants of another selected id (parent deleted once)', () => {
+    const { store, sentRenders } = makeStore({ doc: groupDoc() });
+    // inner sits under card via the child slot + children array chain.
+    store.actions.setSelection(['card', 'inner']);
+    const result = store.actions.deleteSelected();
+    expect(result.ok).toBe(true);
+    expect(docIds(store)).toEqual(['root', 'txt', 'txt2']);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(sentRenders).toHaveLength(1);
+    expect(store.getState().toast).toBeNull(); // nothing skipped, nothing to report
+    store.actions.undo();
+    expect(docIds(store)).toEqual(['root', 'card', 'cardBody', 'inner', 'txt', 'txt2']);
+  });
+
+  it('skips single-slot occupants, reports them via toast, keeps them selected', () => {
+    const { store, sentRenders, sentSelectionPayloads } = makeStore({ doc: groupDoc() });
+    store.actions.setSelection(['cardBody', 'txt']); // cardBody fills card's child slot
+    const result = store.actions.deleteSelected();
+    expect(result.ok).toBe(true); // partial success
+    expect(docIds(store)).toEqual(['root', 'card', 'cardBody', 'inner', 'txt2']);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(sentRenders).toHaveLength(1);
+    expect(store.getState().toast?.message).toBe('1 skipped — single-slot occupant (#cardBody)');
+    // The survivor stays selected (and the catalog was told the new list).
+    expect(store.getState().selectedComponentIds).toEqual(['cardBody']);
+    expect(sentSelectionPayloads.at(-1)).toEqual({ id: 'cardBody', ids: ['cardBody'] });
+    store.actions.undo(); // ONE step restores the partial delete
+    expect(docIds(store)).toEqual(['root', 'card', 'cardBody', 'inner', 'txt', 'txt2']);
+  });
+
+  it('pluralizes the skip report', () => {
+    const doc = groupDoc();
+    // Give txt2 a slot parent too: a Button whose child is txt2.
+    doc.components.push({ id: 'btn', component: 'Button', child: 'txt2' });
+    doc.components[0] = { id: 'root', component: 'Column', children: ['card', 'txt', 'btn'] };
+    const { store } = makeStore({ doc });
+    store.actions.setSelection(['cardBody', 'txt2', 'txt']);
+    expect(store.actions.deleteSelected().ok).toBe(true);
+    expect(store.getState().toast?.message).toBe(
+      '2 skipped — single-slot occupants (#cardBody, #txt2)',
+    );
+  });
+
+  it('returns an error and changes nothing when every id is skipped or subsumed', () => {
+    const { store, sentRenders } = makeStore({ doc: groupDoc() });
+    const before = store.getState().doc;
+    // inner is subsumed under cardBody; cardBody itself is slot-skipped.
+    store.actions.setSelection(['cardBody', 'inner']);
+    const refused = store.actions.deleteSelected();
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error).toMatch(/single slot/);
+    expect(store.getState().doc).toBe(before);
+    expect(store.getState().undoStack).toHaveLength(0);
+    expect(sentRenders).toHaveLength(0);
+    expect(store.getState().selectedComponentIds).toEqual(['cardBody', 'inner']); // retained
+    expect(store.getState().events.some((e) => e.kind === 'error')).toBe(true);
+  });
+
+  it('root in the selection subsumes everything and is itself refused', () => {
+    const { store } = makeStore({ doc: groupDoc() });
+    const before = store.getState().doc;
+    store.actions.setSelection(['root', 'txt', 'card']);
+    const refused = store.actions.deleteSelected();
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error).toMatch(/clear the canvas/);
+    expect(store.getState().doc).toBe(before);
   });
 });

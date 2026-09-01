@@ -307,6 +307,110 @@ describe('Inspector no-specs fallback', () => {
   });
 });
 
+describe('Inspector multi-selection state (contract §4f)', () => {
+  it('renders "N selected" with type #id rows instead of the prop form', () => {
+    const { store } = setup();
+    act(() => {
+      store.actions.toggleSelected('txt');
+      store.actions.toggleSelected('chk');
+    });
+    const multi = screen.getByTestId('inspector-multi');
+    expect(multi.textContent).toContain('2 selected');
+    expect(screen.queryByTestId('prop-text')).toBeNull(); // no prop form
+    expect(screen.queryByTestId('inspector-breadcrumb')).toBeNull(); // no breadcrumb
+    const rowTxt = screen.getByTestId('inspector-multi-row-txt');
+    expect(rowTxt.textContent).toContain('Text');
+    expect(rowTxt.textContent).toContain('#txt');
+    expect(rowTxt.className).toContain('primary'); // first id = primary
+    const rowChk = screen.getByTestId('inspector-multi-row-chk');
+    expect(rowChk.textContent).toContain('CheckBox');
+    expect(rowChk.className).not.toContain('primary');
+  });
+
+  it('a single selection keeps the existing inspector untouched', () => {
+    const { store } = setup();
+    act(() => store.actions.selectComponent('txt'));
+    expect(screen.queryByTestId('inspector-multi')).toBeNull();
+    expect(screen.getByTestId('inspector-breadcrumb')).toBeTruthy();
+    expect(screen.getByTestId('prop-text')).toBeTruthy();
+  });
+
+  it('clicking a row collapses the selection to that id (honing)', () => {
+    const { store } = setup();
+    act(() => {
+      store.actions.toggleSelected('txt');
+      store.actions.toggleSelected('chk');
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId('inspector-multi-row-chk'));
+    });
+    expect(store.getState().selectedComponentIds).toEqual(['chk']);
+    // Back to the single inspector, showing the collapsed-to component.
+    expect(screen.queryByTestId('inspector-multi')).toBeNull();
+    expect(screen.getByTestId('inspector').textContent).toContain('#chk');
+  });
+
+  it('Delete removes the whole group as one undo step and empties the inspector', () => {
+    const { store } = setup();
+    act(() => {
+      store.actions.toggleSelected('card');
+      store.actions.toggleSelected('txt');
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId('inspector-multi-delete'));
+    });
+    const ids = store.getState().doc.components.map((c) => c.id);
+    expect(ids).toEqual(['root', 'boundTxt', 'chk']); // card + cardBody + txt gone
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(screen.getByTestId('inspector-empty')).toBeTruthy();
+  });
+
+  it('warns about single-slot occupants and skips them on Delete', () => {
+    const { store } = setup();
+    act(() => {
+      store.actions.toggleSelected('cardBody'); // fills card's child slot
+      store.actions.toggleSelected('txt');
+    });
+    expect(screen.getByTestId('inspector-multi-hint').textContent).toMatch(
+      /#cardBody.*single slot.*skipped/,
+    );
+    act(() => {
+      fireEvent.click(screen.getByTestId('inspector-multi-delete'));
+    });
+    const ids = store.getState().doc.components.map((c) => c.id);
+    expect(ids).toContain('cardBody'); // skipped
+    expect(ids).not.toContain('txt'); // deleted
+    expect(store.getState().toast?.message).toBe('1 skipped — single-slot occupant (#cardBody)');
+    // The survivor stays selected → the single inspector takes over with its
+    // own slot-occupant hint.
+    expect(store.getState().selectedComponentIds).toEqual(['cardBody']);
+    expect(screen.getByTestId('inspector-delete-hint')).toBeTruthy();
+  });
+
+  it('disables Delete when nothing in the selection is deletable', () => {
+    const { store } = setup();
+    act(() => {
+      store.actions.toggleSelected('root');
+      store.actions.toggleSelected('cardBody'); // subsumed under selected root
+    });
+    const del = screen.getByTestId('inspector-multi-delete') as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+  });
+
+  it('Clear empties the whole selection', () => {
+    const { store } = setup();
+    act(() => {
+      store.actions.toggleSelected('txt');
+      store.actions.toggleSelected('chk');
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId('inspector-multi-clear'));
+    });
+    expect(store.getState().selectedComponentIds).toEqual([]);
+    expect(screen.getByTestId('inspector-empty')).toBeTruthy();
+  });
+});
+
 describe('ancestor breadcrumb + parent button (contract §7 ancestor honing)', () => {
   it('renders the full root-first path with the current chip disabled', () => {
     const { store } = setup();

@@ -6,6 +6,7 @@ import {
   BridgeHost,
   COMPOSERX_DND_HOVER,
   COMPOSERX_DND_TARGET,
+  COMPOSERX_MARQUEE,
   COMPOSERX_MOVE_CANCEL,
   COMPOSERX_MOVE_DROP,
   COMPOSERX_MOVE_START,
@@ -14,8 +15,10 @@ import {
   COMPOSERX_SET_MODE,
   COMPOSERX_SET_SELECTION,
   COMPOSERX_SIDECAR_READY,
+  parseMarqueePayload,
   parseMoveDropPayload,
   parseMoveIdPayload,
+  parseSelectPayload,
   parseSidecarFeatures,
 } from '../src/lib/bridge-host';
 
@@ -42,6 +45,7 @@ interface Harness {
     onSidecarReady: ReturnType<typeof vi.fn>;
     onDndTarget: ReturnType<typeof vi.fn>;
     onSelect: ReturnType<typeof vi.fn>;
+    onMarquee: ReturnType<typeof vi.fn>;
     onPropSpecs: ReturnType<typeof vi.fn>;
     onMoveStart: ReturnType<typeof vi.fn>;
     onMoveDrop: ReturnType<typeof vi.fn>;
@@ -82,6 +86,7 @@ function makeHarness(overrides: Partial<BridgeHostCallbacks> = {}): Harness {
     onSidecarReady: vi.fn(),
     onDndTarget: vi.fn(),
     onSelect: vi.fn(),
+    onMarquee: vi.fn(),
     onPropSpecs: vi.fn(),
     onMoveStart: vi.fn(),
     onMoveDrop: vi.fn(),
@@ -218,6 +223,27 @@ describe('BridgeHost buffering and handshake', () => {
     const types = h.sent.map((s) => s.message.type);
     expect(types).not.toContain(COMPOSERX_SET_MODE);
     expect(types).not.toContain(COMPOSERX_SET_SELECTION);
+  });
+
+  it('re-sends {id, ids} on handshake when getSelectionIds is provided (§4f)', () => {
+    const h = makeHarness({ getSelectionIds: () => ['sel-1', 'sel-2'] });
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    const setSelection = h.sent.filter((s) => s.message.type === COMPOSERX_SET_SELECTION);
+    expect(setSelection).toHaveLength(1);
+    expect(setSelection[0]!.message.payload).toEqual({
+      id: 'sel-1',
+      ids: ['sel-1', 'sel-2'],
+    });
+  });
+
+  it('sendSetSelection forwards the full {id, ids} payload', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.sent.length = 0;
+    h.host.sendSetSelection({ id: 'a', ids: ['a', 'b'] });
+    expect(h.sent.map((s) => s.message)).toEqual([
+      { type: COMPOSERX_SET_SELECTION, payload: { id: 'a', ids: ['a', 'b'] } },
+    ]);
   });
 
   it('queues sendSetMode / sendSetSelection until ready, then sends immediately', () => {
@@ -414,6 +440,92 @@ describe('BridgeHost MOVE_* routing (§4e)', () => {
     expect(h.callbacks.onMoveDrop).not.toHaveBeenCalled();
     expect(h.callbacks.onMoveCancel).not.toHaveBeenCalled();
     expect(h.callbacks.onUnknown).not.toHaveBeenCalled();
+  });
+});
+
+describe('BridgeHost SELECT/MARQUEE routing (§4f)', () => {
+  it('forwards the additive flag on SELECT', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.dispatch(COMPOSERX_SELECT, { id: 'hit', additive: true });
+    h.dispatch(COMPOSERX_SELECT, { id: 'hit', additive: false });
+    h.dispatch(COMPOSERX_SELECT, { id: 'hit' });
+    expect(h.callbacks.onSelect).toHaveBeenNthCalledWith(1, { id: 'hit', additive: true });
+    expect(h.callbacks.onSelect).toHaveBeenNthCalledWith(2, { id: 'hit' }); // false → plain
+    expect(h.callbacks.onSelect).toHaveBeenNthCalledWith(3, { id: 'hit' });
+  });
+
+  it('tolerates a non-boolean additive as a plain select (the click survives)', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.dispatch(COMPOSERX_SELECT, { id: 'hit', additive: 'yes' });
+    expect(h.callbacks.onSelect).toHaveBeenCalledWith({ id: 'hit' });
+  });
+
+  it('drops malformed SELECT payloads without invoking callbacks (or onUnknown)', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.dispatch(COMPOSERX_SELECT); // no payload
+    h.dispatch(COMPOSERX_SELECT, 'hit');
+    h.dispatch(COMPOSERX_SELECT, { id: 42 });
+    h.dispatch(COMPOSERX_SELECT, {}); // id missing entirely (null must be explicit)
+    expect(h.callbacks.onSelect).not.toHaveBeenCalled();
+    expect(h.callbacks.onUnknown).not.toHaveBeenCalled();
+  });
+
+  it('routes MARQUEE ids to onMarquee — the empty sweep included', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.dispatch(COMPOSERX_MARQUEE, { ids: ['a', 'b'] });
+    h.dispatch(COMPOSERX_MARQUEE, { ids: [] });
+    expect(h.callbacks.onMarquee).toHaveBeenNthCalledWith(1, { ids: ['a', 'b'] });
+    expect(h.callbacks.onMarquee).toHaveBeenNthCalledWith(2, { ids: [] });
+    expect(h.callbacks.onUnknown).not.toHaveBeenCalled();
+  });
+
+  it('drops malformed MARQUEE payloads without invoking callbacks (or onUnknown)', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.dispatch(COMPOSERX_MARQUEE); // no payload
+    h.dispatch(COMPOSERX_MARQUEE, { ids: 'a' });
+    h.dispatch(COMPOSERX_MARQUEE, { ids: ['a', 5] });
+    h.dispatch(COMPOSERX_MARQUEE, { ids: [null] });
+    h.dispatch(COMPOSERX_MARQUEE, {});
+    h.dispatch(COMPOSERX_MARQUEE, ['a']);
+    expect(h.callbacks.onMarquee).not.toHaveBeenCalled();
+    expect(h.callbacks.onUnknown).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseSelectPayload / parseMarqueePayload', () => {
+  it('accepts well-formed SELECT payloads (null id = background)', () => {
+    expect(parseSelectPayload({ id: 'x' })).toEqual({ id: 'x' });
+    expect(parseSelectPayload({ id: null })).toEqual({ id: null });
+    expect(parseSelectPayload({ id: 'x', additive: true })).toEqual({ id: 'x', additive: true });
+    expect(parseSelectPayload({ id: null, additive: true })).toEqual({
+      id: null,
+      additive: true,
+    });
+  });
+
+  it('downgrades non-true additive and rejects malformed SELECT payloads', () => {
+    expect(parseSelectPayload({ id: 'x', additive: false })).toEqual({ id: 'x' });
+    expect(parseSelectPayload({ id: 'x', additive: 1 })).toEqual({ id: 'x' });
+    expect(parseSelectPayload(undefined)).toBeNull();
+    expect(parseSelectPayload('x')).toBeNull();
+    expect(parseSelectPayload({})).toBeNull();
+    expect(parseSelectPayload({ id: 7 })).toBeNull();
+  });
+
+  it('accepts string-array MARQUEE payloads and rejects the rest', () => {
+    expect(parseMarqueePayload({ ids: [] })).toEqual({ ids: [] });
+    expect(parseMarqueePayload({ ids: ['a'] })).toEqual({ ids: ['a'] });
+    expect(parseMarqueePayload({ ids: ['a', ''] })).toEqual({ ids: ['a', ''] });
+    expect(parseMarqueePayload(null)).toBeNull();
+    expect(parseMarqueePayload({})).toBeNull();
+    expect(parseMarqueePayload({ ids: 'a' })).toBeNull();
+    expect(parseMarqueePayload({ ids: ['a', 2] })).toBeNull();
+    expect(parseMarqueePayload({ ids: [undefined] })).toBeNull();
   });
 });
 

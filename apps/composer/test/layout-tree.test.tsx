@@ -268,6 +268,50 @@ describe('dropping', () => {
   });
 });
 
+describe('multi-select in the tree (contract §4f)', () => {
+  it('shift-click toggles rows into and out of the selection; plain click replaces', () => {
+    const store = setup();
+    fireEvent.click(screen.getByTestId('tree-node-welcome-title')); // plain select
+    fireEvent.click(screen.getByTestId('tree-node-welcome-text'), { shiftKey: true });
+    expect(store.getState().selectedComponentIds).toEqual(['welcome-title', 'welcome-text']);
+    // Toggle one back out.
+    fireEvent.click(screen.getByTestId('tree-node-welcome-text'), { shiftKey: true });
+    expect(store.getState().selectedComponentIds).toEqual(['welcome-title']);
+    // A plain click replaces the rebuilt multi-selection.
+    fireEvent.click(screen.getByTestId('tree-node-welcome-text'), { shiftKey: true });
+    fireEvent.click(screen.getByTestId('tree-node-welcome-cta'));
+    expect(store.getState().selectedComponentIds).toEqual(['welcome-cta']);
+  });
+
+  it('highlights every selected row, the primary strongest', () => {
+    const store = setup();
+    act(() => {
+      store.actions.toggleSelected('welcome-title');
+      store.actions.toggleSelected('welcome-text');
+    });
+    const title = screen.getByTestId('tree-node-welcome-title');
+    const text = screen.getByTestId('tree-node-welcome-text');
+    expect(title.className).toContain('selected');
+    expect(title.className).toContain('primary'); // first id = primary
+    expect(title.getAttribute('aria-pressed')).toBe('true');
+    expect(text.className).toContain('selected');
+    expect(text.className).not.toContain('primary');
+    expect(text.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('tree-node-welcome-cta').className).not.toContain('selected');
+  });
+
+  it('starting a row drag collapses a multi-selection to the dragged id', () => {
+    const store = setup();
+    act(() => {
+      store.actions.toggleSelected('welcome-title');
+      store.actions.toggleSelected('welcome-text');
+    });
+    startMoveDrag('welcome-cta');
+    expect(store.getState().selectedComponentIds).toEqual(['welcome-cta']);
+    expect(store.getState().selectedComponentId).toBe('welcome-cta');
+  });
+});
+
 describe('tree follows the selection (contract §7 ancestor honing)', () => {
   it('scrolls the newly selected node into view', () => {
     const spy = vi.fn();

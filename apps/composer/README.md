@@ -74,15 +74,56 @@ seeds the very first load).
 ## Figma-style editing
 
 **Selection.** One selection is shared by canvas clicks, layout-tree clicks,
-and the inspector. In **edit mode** the catalog's sidecar intercepts pointer
-events on the rendered surface and posts `COMPOSERX_SELECT` with the deepest
-hit id; the composer validates it, updates its state, and answers with
-`COMPOSERX_SET_SELECTION`, which the catalog renders as a solid accent
-outline. Clicking the canvas background (or pressing **Escape**) deselects.
-Selecting a component auto-switches the right sidebar to **Design**; manual
-tab clicks stick until the next selection. Whenever a doc change (undo/redo,
-JSON apply, chat apply, clear, delete) removes the selected id, the selection
-clears automatically and the catalog is told.
+and the inspector — and it is a **list** (`selectedComponentIds`, ordered and
+deduped; the **primary** is the first id, mirrored as `selectedComponentId`
+for every single-selection surface). In **edit mode** the catalog's sidecar
+intercepts pointer events on the rendered surface and posts
+`COMPOSERX_SELECT` with the deepest hit id; the composer validates it,
+updates its state, and answers with `COMPOSERX_SET_SELECTION`
+`{id: primary, ids: full list}` — a v4 catalog outlines every id (primary
+emphasized), a v3 catalog just reads `id`. Clicking the canvas background
+(or pressing **Escape**) clears the whole list. Selecting a component
+auto-switches the right sidebar to **Design**; manual tab clicks stick until
+the next selection. Whenever a doc change (undo/redo, JSON apply, chat
+apply, clear, delete) removes selected ids, the list is filtered (the first
+survivor becomes the primary) and the catalog is told.
+
+**Multi-select** (contract §4f). Three ways to build a multi-selection:
+
+- **Marquee**: in edit mode, press-drag on empty canvas background rubber
+  bands (drawn by the catalog); on release the catalog posts
+  `COMPOSERX_MARQUEE {ids}` with the topmost-intersecting candidates and the
+  composer **replaces** the selection with them (an empty sweep clears).
+- **Shift-click on the canvas** (or a **~350ms touch long-press** — the
+  catalog sets `additive: true` on the SELECT) **toggles** the component in
+  or out of the list. Removing the primary promotes the next id; removing
+  the last id clears. An additive tap never triggers ancestor cycling, and
+  it resets the repeat-tap seed — the next plain tap is a fresh select.
+- **Shift-click in the layout tree** toggles the row the same way (works
+  with ANY renderer — no sidecar involved). Plain clicks stay
+  replace-selects everywhere, and a plain select collapses any
+  multi-selection to just the clicked id. Repeat-tap **ancestor cycling
+  applies only to plain single selects**: while more than one component is
+  selected, the next plain tap is always a fresh select.
+
+With 2+ components selected the Design tab shows a **multi-state**
+(`inspector-multi`): "N selected", one clickable `type #id` row per selected
+component (clicking a row collapses the selection to it — quick honing), a
+**Clear** button, and a group **Delete** (`inspector-multi-delete`):
+
+- ids whose **ancestor is also selected are subsumed** — deleting the
+  ancestor takes them, so a parent+child selection deletes the parent once;
+- **root and single-slot occupants are skipped** (same §5 rules as the
+  single delete) and reported via a toast ("2 skipped — single-slot
+  occupants (…)"); skipped ids stay selected after the delete;
+- everything else is removed in **ONE undo snapshot** (one re-render) — a
+  single undo restores the whole group; if nothing in the selection is
+  deletable, the delete is refused and the doc is untouched.
+
+**What stays single-selection** in this wave: prop editing, the breadcrumb,
+canvas move, and tree reordering. Starting a §4e canvas lift or a tree row
+drag with a multi-selection first **collapses** it to the pressed/dragged
+component, and glossary insert targets derive from the **primary**.
 
 **Insert target.** Glossary clicks and structural (no-sidecar) drops insert
 into the container derived from the selection: the selected component itself
@@ -113,7 +154,9 @@ subtree, splicing it out of the parent's `children` array. It is disabled
 (with a hint) for `root` and for single-slot occupants — a Card/Button
 `child`, Modal `trigger`/`content`, or a Tabs pane — because removing those
 would leave the parent schema-invalid; delete the parent instead, or edit
-via JSON.
+via JSON. With a multi-selection the same rules apply per id through the
+group delete above (subsume descendants, skip slot occupants, one undo
+step).
 
 **Moving placed components.** Two drag surfaces sit over the same pure
 `moveComponent` op (contract §5): the moved component travels with its whole
@@ -158,10 +201,10 @@ reload. In preview the composer also ignores any incoming `COMPOSERX_SELECT`.
 **Keyboard shortcuts** (host document, ignored while focus is in an
 input/textarea/select and while the settings modal is open):
 
-| Key                    | Action                                             |
-| ---------------------- | -------------------------------------------------- |
-| `Escape`               | Deselect                                           |
-| `Delete` / `Backspace` | Delete the selection (when the delete rules allow) |
+| Key                    | Action                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| `Escape`               | Clear the selection (the whole multi-selection list)                             |
+| `Delete` / `Backspace` | Delete the selection under the §4f group rules (no-op when nothing is deletable) |
 
 ## Mobile (≤900px)
 
@@ -199,6 +242,12 @@ layout is untouched at ≥900px.
   unchanged on mobile. The **layout-tree rows stay tap-select only** on
   touch — HTML5 row drag remains desktop-only (HTML5 drag events never fire
   from touch).
+- **Multi-select works under touch.** A ~350ms **long-press** on a rendered
+  component is the catalog's additive toggle (it never lifts), and the
+  background marquee drag rubber-bands as on desktop. Additive taps and
+  marquees keep the Canvas view visible (only plain selects auto-switch to
+  Design); open the Design view to see the "N selected" multi-state with the
+  group Delete and Clear buttons.
 - **Sizing.** App height uses `100dvh` (with a `100vh` fallback); all
   inputs/selects/textareas are ≥16px on mobile (no iOS zoom-on-focus);
   toolbar/tree/drawer controls get ≥44px hit areas, with the toolbar
@@ -232,7 +281,12 @@ checks the announced `features` array, not the version):
 - no `prop-specs` → the inspector falls back to generic JSON rows per prop
   plus an "add prop" row, so every prop stays editable;
 - no `move` → no canvas press-and-drag moves, but drag-to-rearrange in the
-  layout tree keeps working (it never needs the sidecar).
+  layout tree keeps working (it never needs the sidecar);
+- no `multi-select` → no marquee and no canvas shift-click/long-press
+  toggling (a v3 catalog never sends `additive` or `COMPOSERX_MARQUEE`),
+  but tree shift-click still builds multi-selections and the group delete
+  still works — the extra `ids` on `SET_SELECTION` is simply ignored by
+  older renderers, which outline the primary only.
 
 ## Chat: the Anthropic client
 

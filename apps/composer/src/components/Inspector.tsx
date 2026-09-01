@@ -6,15 +6,16 @@
  */
 import { Fragment, useState } from 'react';
 import type { PropSpec } from '../lib/bridge-host';
-import type { DocComponent } from '../lib/surface-doc';
+import type { DocComponent, SurfaceDoc } from '../lib/surface-doc';
 import {
   GUARDED_PROP_KEYS,
   ROOT_ID,
   ancestorChainOf,
+  partitionForDelete,
   singleSlotParentOf,
 } from '../lib/surface-doc';
 import { useComposerState, useStore } from '../state/context';
-import type { ActionResult } from '../state/store';
+import type { ActionResult, ComposerStore } from '../state/store';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -396,11 +397,103 @@ function AddPropRow({ callbacks }: { callbacks: RowCallbacks }) {
   );
 }
 
+/**
+ * Multi-selection state (contract §4f): "N selected" + a component-type
+ * summary as clickable rows (click = collapse the selection to that one id —
+ * quick honing), a group Delete (subsumption + single-slot skip rules live in
+ * the store's deleteSelected), and a Clear-selection button. Prop editing
+ * stays single-selection in this wave.
+ */
+function MultiInspector({
+  store,
+  doc,
+  selectedIds,
+}: {
+  store: ComposerStore;
+  doc: SurfaceDoc;
+  selectedIds: string[];
+}) {
+  const typeOf = (id: string) => doc.components.find((c) => c.id === id)?.component ?? '(missing)';
+  const { deletable, skipped } = partitionForDelete(doc, selectedIds);
+  const deleteDisabled = deletable.length === 0;
+  const deleteHint = deleteDisabled
+    ? 'Nothing in this selection can be deleted — root and single-slot occupants are skipped.'
+    : skipped.length > 0
+      ? `Delete ${deletable.length} of ${selectedIds.length} (single-slot occupants are skipped)`
+      : `Delete all ${selectedIds.length} selected components (one undo step)`;
+  return (
+    <div className="inspector" data-testid="inspector">
+      <div className="inspector-multi" data-testid="inspector-multi">
+        <header className="inspector-header">
+          <div className="inspector-title">
+            <span className="inspector-type">{selectedIds.length} selected</span>
+            <span className="inspector-id mono">primary #{selectedIds[0]}</span>
+          </div>
+          <div className="inspector-actions">
+            <button
+              data-testid="inspector-multi-clear"
+              title="Clear the selection (Escape)"
+              onClick={() => store.actions.clearSelection()}
+            >
+              Clear
+            </button>
+            <button
+              className="danger"
+              data-testid="inspector-multi-delete"
+              disabled={deleteDisabled}
+              title={deleteHint}
+              onClick={() => store.actions.deleteSelected()}
+            >
+              Delete
+            </button>
+          </div>
+        </header>
+        {skipped.length > 0 && (
+          <p className="hint inspector-delete-hint" data-testid="inspector-multi-hint">
+            {skipped.map((id) => `#${id}`).join(', ')} fill{skipped.length === 1 ? 's' : ''} a
+            single slot and will be skipped on delete.
+          </p>
+        )}
+        <ul className="multi-list" data-testid="inspector-multi-list">
+          {selectedIds.map((id, i) => (
+            <li key={id}>
+              <button
+                className={`multi-row ${i === 0 ? 'primary' : ''}`}
+                data-testid={`inspector-multi-row-${id}`}
+                title={`Select only ${typeOf(id)} #${id}`}
+                onClick={() => store.actions.selectComponent(id)}
+              >
+                <span className="tree-type">{typeOf(id)}</span>
+                <span className="tree-id">#{id}</span>
+                {i === 0 && (
+                  <span className="multi-primary-badge" aria-label="primary selection">
+                    primary
+                  </span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <p className="muted multi-note">
+          Prop editing, canvas move, and tree reordering use a single selection — click a row to
+          narrow down to it.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function Inspector() {
   const store = useStore();
   const state = useComposerState();
   const selectedId = state.selectedComponentId;
   const component = selectedId ? state.doc.components.find((c) => c.id === selectedId) : undefined;
+
+  if (state.selectedComponentIds.length > 1) {
+    return (
+      <MultiInspector store={store} doc={state.doc} selectedIds={state.selectedComponentIds} />
+    );
+  }
 
   if (!selectedId || !component) {
     return (

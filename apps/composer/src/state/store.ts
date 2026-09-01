@@ -14,11 +14,13 @@ import type { ComponentUsages } from 'a2ui-bridge/render-config';
 import type {
   ComposerMode,
   DndTargetPayload,
+  MarqueePayload,
   MoveDropPayload,
   MoveIdPayload,
   PropSpecsMap,
   PropSpecsPayload,
   SelectionPayload,
+  SetSelectionPayload,
   SidecarReadyPayload,
 } from '../lib/bridge-host';
 import { parseSidecarFeatures } from '../lib/bridge-host';
@@ -42,6 +44,7 @@ import {
   insertUsage,
   moveComponent,
   parseRenderMessages,
+  partitionForDelete,
   removeComponent,
   removeComponentProp,
   setComponentProp,
@@ -71,7 +74,8 @@ export interface RenderPort {
   sendRender(items: RenderA2uiItem[]): void;
   sendTheme(theme: Theme): void;
   sendSetMode(payload: { mode: ComposerMode }): void;
-  sendSetSelection(payload: { id: string | null }): void;
+  /** Every selection change re-sends `{id: primary, ids: full list}` (§4f). */
+  sendSetSelection(payload: SetSelectionPayload): void;
 }
 
 export interface ComposerSettings {
@@ -131,8 +135,19 @@ export interface ComposerState {
   docRevision: number;
   undoStack: SurfaceDoc[];
   redoStack: SurfaceDoc[];
-  /** Unified Figma-style selection shared by canvas, tree, and inspector. */
+  /**
+   * Unified Figma-style selection shared by canvas, tree, and inspector —
+   * PRIMARY only, kept as derived state (`selectedComponentIds[0] ?? null`,
+   * always updated in the same set()) because most consumers are
+   * single-selection surfaces (inspector form, insert target, breadcrumb).
+   */
   selectedComponentId: string | null;
+  /**
+   * The full selection list (contract §4f): ordered, deduped, primary first.
+   * Plain selects replace it with [id]/[]; additive selects toggle; marquees
+   * replace wholesale; doc changes filter out stale ids.
+   */
+  selectedComponentIds: string[];
   /** Edit (canvas clicks select) vs preview (live components). Not persisted. */
   mode: ComposerMode;
   /** Per-component prop specs from COMPOSERX_PROP_SPECS; null until arrived. */
@@ -219,6 +234,8 @@ export interface ComposerActions {
   bridgeConsole(payload: ConsoleLogPayload): void;
   bridgeSidecarReady(payload: SidecarReadyPayload): void;
   bridgeSelect(payload: SelectionPayload): void;
+  /** COMPOSERX_MARQUEE (§4f): replace the selection list with the swept ids. */
+  bridgeMarquee(payload: MarqueePayload): void;
   bridgePropSpecs(payload: PropSpecsPayload): void;
   bridgeMoveStart(payload: MoveIdPayload): void;
   bridgeMoveDrop(payload: MoveDropPayload): void;
@@ -253,6 +270,21 @@ export interface ComposerActions {
    * visible for the rest of the in-flight drag (contract §7b).
    */
   selectComponent(id: string | null, opts?: { autoView?: boolean }): void;
+  /**
+   * Additive toggle (§4f): shift-click / long-press / tree shift-click. Adds
+   * the id to the end of the list or removes it; removing the primary
+   * promotes the next id; removing the last clears. Unknown ids are ignored.
+   * Never switches the mobile view — building a multi-selection is an
+   * in-flight canvas interaction (same reasoning as MOVE_START's autoView).
+   */
+  toggleSelected(id: string): void;
+  /**
+   * Replace the whole selection list (§4f marquee): dedupes (first occurrence
+   * wins) and filters to ids present in the doc. [] clears.
+   */
+  setSelection(ids: string[]): void;
+  /** Clear the whole selection list (Escape / background click / Clear button). */
+  clearSelection(): void;
   setMode(mode: ComposerMode): void;
   // ui
   setDragging(dragging: boolean): void;
@@ -297,6 +329,7 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     undoStack: [],
     redoStack: [],
     selectedComponentId: null,
+    selectedComponentIds: [],
     mode: 'edit',
     propSpecs: null,
     handshake: initialHandshake(),
@@ -347,20 +380,37 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
   }
 
   /**
-   * Selection survives a doc change only while its id still exists; a stale
-   * id clears to null (and the catalog is told, so its outline goes away).
-   * Returns the state patch; the SET_SELECTION side effect runs in the caller
-   * after set() so the renderer sees selection changes in order.
+   * The state patch for a new selection list: the list plus its derived
+   * primary (`ids[0] ?? null`), always written in the same set() so no
+   * consumer ever observes them out of sync.
+   */
+  function selectionPatch(ids: string[]): Partial<ComposerState> {
+    return { selectedComponentIds: ids, selectedComponentId: ids[0] ?? null };
+  }
+
+  /** Contract §4f: every selection change re-sends `{id: primary, ids}`. */
+  function sendSelection(ids: string[]): void {
+    port?.sendSetSelection({ id: ids[0] ?? null, ids });
+  }
+
+  /**
+   * The selection survives a doc change only where its ids still exist: the
+   * LIST is filtered (order kept — the first survivor becomes the primary),
+   * and the catalog is told so stale outlines go away. Returns the state
+   * patch; the SET_SELECTION side effect runs in the caller after set() so
+   * the renderer sees selection changes in order.
    */
   function reconcileSelection(doc: SurfaceDoc): {
     patch: Partial<ComposerState>;
-    cleared: boolean;
+    changed: boolean;
+    ids: string[];
   } {
-    const id = state.selectedComponentId;
-    if (id === null || doc.components.some((c) => c.id === id)) {
-      return { patch: {}, cleared: false };
+    const current = state.selectedComponentIds;
+    const ids = current.filter((id) => doc.components.some((c) => c.id === id));
+    if (ids.length === current.length) {
+      return { patch: {}, changed: false, ids: current };
     }
-    return { patch: { selectedComponentId: null }, cleared: true };
+    return { patch: selectionPatch(ids), changed: true, ids };
   }
 
   /**
@@ -396,7 +446,7 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       ),
     });
     sendRender(doc);
-    if (selection.cleared) port?.sendSetSelection({ id: null });
+    if (selection.changed) sendSelection(selection.ids);
   }
 
   function restoreDoc(doc: SurfaceDoc, patch: Partial<ComposerState>, label: string): void {
@@ -413,7 +463,7 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       ),
     });
     sendRender(doc);
-    if (selection.cleared) port?.sendSetSelection({ id: null });
+    if (selection.changed) sendSelection(selection.ids);
   }
 
   const actions: ComposerActions = {
@@ -482,9 +532,19 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       const raw = payload && typeof payload === 'object' ? payload.id : null;
       const id = typeof raw === 'string' ? raw : null;
       if (id === null) {
-        // Background tap: deselect as always AND reset the repeat-tap cycle.
+        // Background tap: clear the WHOLE selection list (§4f) as always
+        // AND reset the repeat-tap cycle.
         lastCanvasHitId = null;
-        actions.selectComponent(null);
+        actions.clearSelection();
+        return;
+      }
+      if (payload.additive === true) {
+        // Additive select (§4f: shift-click / long-press): toggle the id in
+        // or out of the list — NEVER cycle — and reset the repeat-tap seed:
+        // a toggle breaks the tap rhythm, so the next PLAIN tap on the same
+        // spot must be a fresh deepest select, not an ancestor hop.
+        lastCanvasHitId = null;
+        actions.toggleSelected(id);
         return;
       }
       // Repeat-tap ancestor cycling (contract §7 ancestor honing): the
@@ -497,9 +557,18 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       // select. The chain hops the same edges as the tree (children arrays
       // AND child/trigger/content/tabs[].child slots) and is recomputed
       // against the current doc on every tap, so it is never stale.
+      // §4f guard: cycling applies ONLY to plain single selects — with a
+      // multi-selection (length > 1) the next plain tap is a fresh replace
+      // (the chain-membership check uses the primary, but the length gate
+      // fires first, so a multi-selection never hones).
       const chain = ancestorChainOf(state.doc, id);
       const selected = state.selectedComponentId;
-      if (id === lastCanvasHitId && selected !== null && chain.includes(selected)) {
+      if (
+        state.selectedComponentIds.length === 1 &&
+        id === lastCanvasHitId &&
+        selected !== null &&
+        chain.includes(selected)
+      ) {
         // One ancestor up from the CURRENT selection; past the top (root, or
         // a parentless orphan) wrap back to the deepest hit itself. Each
         // step goes through selectComponent, so SET_SELECTION re-sends and
@@ -508,10 +577,16 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
         actions.selectComponent(next);
         return; // lastCanvasHitId already === id
       }
-      // Fresh select. Only ids present in the current doc seed the cycle
-      // (chain is [] for stale ids — selectComponent ignores those anyway).
+      // Fresh select: replaces any multi-selection with just [id] (§4f).
+      // Only ids present in the current doc seed the cycle (chain is [] for
+      // stale ids — selectComponent ignores those anyway).
       lastCanvasHitId = chain.length > 0 ? id : null;
       actions.selectComponent(id);
+    },
+    bridgeMarquee(payload) {
+      // Marquee is an edit-mode gesture (§4f); mirror the SELECT guard.
+      if (state.mode === 'preview') return;
+      actions.setSelection(payload.ids);
     },
     bridgePropSpecs(payload) {
       const components =
@@ -700,17 +775,51 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       }
     },
     deleteSelected() {
-      const id = state.selectedComponentId;
-      if (id === null) {
+      // Group delete (contract §4f): consider the whole selected set. Ids
+      // whose ancestor is also selected are subsumed (the ancestor's removal
+      // takes them); of the rest, root and single-slot occupants are skipped
+      // and reported, everything else is removed in ONE undo snapshot.
+      const ids = state.selectedComponentIds;
+      if (ids.length === 0) {
         return { ok: false, error: 'nothing selected' };
       }
+      const { deletable, skipped } = partitionForDelete(state.doc, ids);
+      if (deletable.length === 0) {
+        if (skipped.length === 0) {
+          return { ok: false, error: 'nothing selected' }; // all ids stale
+        }
+        const names = skipped.map((s) => `#${s}`).join(', ');
+        const error = skipped.every((s) => s === ROOT_ID)
+          ? `cannot remove "${ROOT_ID}" — clear the canvas instead`
+          : `cannot delete ${names}: single slot occupant${skipped.length === 1 ? '' : 's'} — ` +
+            'delete the parent instead, or edit via JSON';
+        log('error', `Remove ${names} refused: ${error}`);
+        return { ok: false, error };
+      }
       try {
-        const doc = removeComponent(state.doc, id);
-        applyDoc(doc, `remove ${id}`);
+        // Sequential removals on a working doc, ONE applyDoc = one undo
+        // snapshot + one re-render. An id an earlier subtree already took
+        // out (shared-reference exotics the subsumption pass cannot see) is
+        // simply skipped — removeComponent would throw on it.
+        let doc = state.doc;
+        for (const id of deletable) {
+          if (!doc.components.some((c) => c.id === id)) continue;
+          doc = removeComponent(doc, id);
+        }
+        applyDoc(doc, `remove ${deletable.join(', ')}`);
+        if (skipped.length > 0) {
+          // Contract §4f: partial deletes report the survivors — the skipped
+          // ids stay selected (they still exist), so the inspector's hint
+          // shows the reason too.
+          const names = skipped.map((s) => `#${s}`).join(', ');
+          actions.showToast(
+            `${skipped.length} skipped — single-slot occupant${skipped.length === 1 ? '' : 's'} (${names})`,
+          );
+        }
         return { ok: true };
       } catch (err) {
         const error = errorMessage(err);
-        log('error', `Remove ${id} failed: ${error}`);
+        log('error', `Remove ${deletable.join(', ')} failed: ${error}`);
         return { ok: false, error };
       }
     },
@@ -744,22 +853,68 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       if (id !== null && !state.doc.components.some((c) => c.id === id)) {
         return; // stale id (race with a re-render) — keep the current selection
       }
+      // Plain select: REPLACE the whole list with [id] / [] (§4f) — this is
+      // every single-select path (canvas tap, tree click, breadcrumb, ↑
+      // parent, MOVE_START lift, tree drag start), so lifting or clicking
+      // with a multi-selection collapses it to the pressed component.
       // Selecting a component brings the Design inspector forward; manual tab
       // clicks stick until the next selection. Deselecting leaves the tab.
       // On mobile the same selection also switches the single-column view to
       // Design (contract §7b) unless the caller opts out (MOVE_START must
       // keep the canvas visible for the in-flight §4e gesture).
       const autoView = opts?.autoView !== false;
+      const ids = id !== null ? [id] : [];
       const patch: Partial<ComposerState> =
         id !== null
           ? {
-              selectedComponentId: id,
+              ...selectionPatch(ids),
               rightTab: 'design',
               ...(state.mobile && autoView ? { mobileView: 'design' as MobileView } : {}),
             }
-          : { selectedComponentId: null };
+          : selectionPatch(ids);
       set(patch);
-      port?.sendSetSelection({ id });
+      sendSelection(ids);
+    },
+    toggleSelected(id) {
+      if (!state.doc.components.some((c) => c.id === id)) {
+        return; // stale id — same guard as selectComponent
+      }
+      const current = state.selectedComponentIds;
+      // Toggle out (removing the primary promotes the next id positionally;
+      // removing the last id clears) or append at the end.
+      const ids = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+      // A non-empty result brings the Design inspector forward (its
+      // multi-state shows the growing selection); emptying the list is a
+      // deselect and leaves the tab, like selectComponent(null). The mobile
+      // view is deliberately never switched here — hiding the canvas after
+      // each toggle would make building a multi-selection by long-press
+      // impossible (contract §7b spirit, same as MOVE_START's autoView).
+      set({
+        ...selectionPatch(ids),
+        ...(ids.length > 0 ? { rightTab: 'design' as RightTab } : {}),
+      });
+      sendSelection(ids);
+    },
+    setSelection(ids) {
+      // Marquee replace (§4f): dedupe (first occurrence wins), filter to ids
+      // present in the doc. [] clears. Same mobile-view reasoning as
+      // toggleSelected — the marquee is a canvas gesture.
+      const seen = new Set<string>();
+      const next: string[] = [];
+      for (const id of ids) {
+        if (seen.has(id) || !state.doc.components.some((c) => c.id === id)) continue;
+        seen.add(id);
+        next.push(id);
+      }
+      set({
+        ...selectionPatch(next),
+        ...(next.length > 0 ? { rightTab: 'design' as RightTab } : {}),
+      });
+      sendSelection(next);
+    },
+    clearSelection() {
+      set(selectionPatch([]));
+      sendSelection([]);
     },
     setMode(mode) {
       if (state.mode === mode) return;

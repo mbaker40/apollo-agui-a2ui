@@ -132,6 +132,34 @@ describe('keyboard shortcuts', () => {
     expect(store.getState().doc.components.some((c) => c.id === 'welcome-card')).toBe(true);
   });
 
+  it('Escape clears the whole multi-selection (contract §4f)', () => {
+    const store = makeStore();
+    store.actions.toggleSelected('welcome-title');
+    store.actions.toggleSelected('welcome-text');
+    handleShortcutKey(store, keyEvent('Escape'));
+    expect(store.getState().selectedComponentIds).toEqual([]);
+    expect(store.getState().selectedComponentId).toBeNull();
+  });
+
+  it('Delete applies the §4f group rules to a multi-selection', () => {
+    const store = makeStore();
+    // Nothing deletable (slot occupant + its subsumed descendant) → silent no-op.
+    store.actions.toggleSelected('welcome-body');
+    store.actions.toggleSelected('welcome-title');
+    handleShortcutKey(store, keyEvent('Delete'));
+    expect(store.getState().undoStack).toHaveLength(0);
+    expect(store.getState().doc.components.some((c) => c.id === 'welcome-body')).toBe(true);
+    // A deletable group root (card subsumes its selected descendant) → removed.
+    store.actions.clearSelection();
+    store.actions.toggleSelected('welcome-card');
+    store.actions.toggleSelected('welcome-title');
+    const e = keyEvent('Delete');
+    handleShortcutKey(store, e);
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(store.getState().doc.components.map((c) => c.id)).toEqual(['root']);
+    expect(store.getState().undoStack).toHaveLength(1);
+  });
+
   it('useGlobalShortcuts wires window keydown to the handler', () => {
     const store = makeStore();
     function Harness({ s }: { s: ComposerStore }) {

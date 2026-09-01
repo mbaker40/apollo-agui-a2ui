@@ -52,6 +52,40 @@ describe('layout tree selection', () => {
   });
 });
 
+describe('sidecar multi-select wiring (contract §4f)', () => {
+  const RENDERER_ORIGIN = 'http://localhost:7465'; // vitest runs DEV → §9 default URL
+
+  function postFromRenderer(type: string, payload?: unknown) {
+    const iframe = document.querySelector('iframe.renderer-iframe') as HTMLIFrameElement;
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: payload === undefined ? { type } : { type, payload },
+          origin: RENDERER_ORIGIN,
+          source: iframe.contentWindow as MessageEventSource,
+        }),
+      );
+    });
+  }
+
+  it('routes COMPOSERX_MARQUEE and additive COMPOSERX_SELECT into the store', () => {
+    const store = setup();
+    postFromRenderer('COMPOSERX_MARQUEE', { ids: ['welcome-title', 'welcome-text'] });
+    expect(store.getState().selectedComponentIds).toEqual(['welcome-title', 'welcome-text']);
+    postFromRenderer('COMPOSERX_SELECT', { id: 'welcome-cta', additive: true });
+    expect(store.getState().selectedComponentIds).toEqual([
+      'welcome-title',
+      'welcome-text',
+      'welcome-cta',
+    ]);
+    postFromRenderer('COMPOSERX_SELECT', { id: null }); // background click clears
+    expect(store.getState().selectedComponentIds).toEqual([]);
+    // Malformed marquee payloads never reach the store.
+    postFromRenderer('COMPOSERX_MARQUEE', { ids: ['welcome-title', 7] });
+    expect(store.getState().selectedComponentIds).toEqual([]);
+  });
+});
+
 describe('structural drop fallback', () => {
   it('shows the derived insert target in the drop hint when no DnD sidecar exists', () => {
     const store = setup();

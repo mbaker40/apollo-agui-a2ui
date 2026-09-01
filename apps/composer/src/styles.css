@@ -940,6 +940,51 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
 }
+/* Ancestor breadcrumb (contract §7 ancestor honing): the full root-first
+   path as chips; the current selection's chip is styled, not clickable.
+   Desktop may wrap; ≤900px it becomes one horizontally scrollable row. */
+.inspector-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 8px 12px 0;
+}
+.crumb {
+  flex: none;
+  border: 1px solid transparent;
+  background: none;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.crumb:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* The current chip is disabled (not clickable) but must read as "here",
+   not "off" — undo the global disabled dimming. */
+.crumb.current {
+  background: var(--accent-soft);
+  color: var(--accent);
+  opacity: 1;
+  cursor: default;
+}
+.crumb-sep {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.74rem;
+  user-select: none;
+}
+.inspector-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
 .inspector-header {
   display: flex;
   align-items: center;
@@ -1450,6 +1495,18 @@ button.danger:hover:not(:disabled) {
   .tree-node {
     align-items: center;
     padding: 4px 10px;
+  }
+  /* Ancestor breadcrumb: one thumb-friendly row that scrolls horizontally
+     within itself (contract §7b) — never wraps, never widens the page. */
+  .inspector-breadcrumb {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    padding-bottom: 4px;
+  }
+  .crumb {
+    min-height: 44px;
+    padding: 2px 12px;
   }
   .canvas-scroll {
     padding: 8px;

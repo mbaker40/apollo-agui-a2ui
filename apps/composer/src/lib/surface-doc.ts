@@ -641,21 +641,21 @@ export function moveComponent(
 }
 
 /**
- * Where a glossary insert goes given the current selection (contract §7):
- * the selected component itself if it is a children-array container, else
- * its nearest ancestor (walking the same reference edges as componentTree —
- * through Card/Modal/Tabs slots) that is one, else root.
+ * Parent map by first discovery on a breadth-first walk from root of the
+ * SAME reference edges as componentTree: `children` arrays, the single
+ * slots (Card/Button `child`, Modal `trigger`/`content`, `tabs[].child`),
+ * and any other string prop that exactly matches a component id.
+ *
+ * Determinism rule for multi-parent ids (an id referenced twice): the FIRST
+ * parent discovered wins — BFS order makes that the referrer closest to
+ * root, with ties at equal depth broken by flat-list/prop order. Each id is
+ * assigned a parent at most once (cycle-proof by construction), and ids not
+ * reachable from root never get an entry.
  */
-export function insertTargetFor(doc: SurfaceDoc, selectedId: string | null): string {
-  if (selectedId === null) return ROOT_ID;
-  const selected = doc.components.find((c) => c.id === selectedId);
-  if (!selected) return ROOT_ID;
-  if (CONTAINER_COMPONENTS.has(selected.component)) return selectedId;
-
-  // Parent map by first discovery from root (mirrors componentTree's edges).
-  const known = new Set(doc.components.map((c) => c.id));
+function parentMapFromRoot(components: DocComponent[]): Map<string, string> {
+  const known = new Set(components.map((c) => c.id));
   const byId = new Map<string, DocComponent>();
-  for (const c of doc.components) {
+  for (const c of components) {
     if (!byId.has(c.id)) byId.set(c.id, c);
   }
   const parentOf = new Map<string, string>();
@@ -678,6 +678,51 @@ export function insertTargetFor(doc: SurfaceDoc, selectedId: string | null): str
       queue.push(ref);
     }
   }
+  return parentOf;
+}
+
+/**
+ * The inclusive ancestor chain of `id`, deepest-first (contract §7 ancestor
+ * honing): `[id, parent, grandparent, …, 'root']`, walking the same
+ * reference edges as componentTree — children arrays AND single slots — so
+ * a Card's text chains Text → body Column → Card → … → root. Unknown ids
+ * yield an empty array. Multi-parent ids resolve deterministically to the
+ * first parent found (see parentMapFromRoot). Cycle-guarded twice over: the
+ * BFS assigns each id at most one parent, and the upward walk refuses to
+ * revisit an id. A component that exists but is unreachable from root has
+ * no discovered parent, so its chain is just `[id]` (it cannot end at root).
+ */
+export function ancestorChainOf(doc: SurfaceDoc, id: string): string[] {
+  if (!doc.components.some((c) => c.id === id)) return [];
+  const parentOf = parentMapFromRoot(doc.components);
+  const chain: string[] = [id];
+  const seen = new Set<string>([id]);
+  let cursor = parentOf.get(id);
+  while (cursor !== undefined && !seen.has(cursor)) {
+    chain.push(cursor);
+    seen.add(cursor);
+    cursor = parentOf.get(cursor);
+  }
+  return chain;
+}
+
+/**
+ * Where a glossary insert goes given the current selection (contract §7):
+ * the selected component itself if it is a children-array container, else
+ * its nearest ancestor (walking the same reference edges as componentTree —
+ * through Card/Modal/Tabs slots) that is one, else root.
+ */
+export function insertTargetFor(doc: SurfaceDoc, selectedId: string | null): string {
+  if (selectedId === null) return ROOT_ID;
+  const selected = doc.components.find((c) => c.id === selectedId);
+  if (!selected) return ROOT_ID;
+  if (CONTAINER_COMPONENTS.has(selected.component)) return selectedId;
+
+  const byId = new Map<string, DocComponent>();
+  for (const c of doc.components) {
+    if (!byId.has(c.id)) byId.set(c.id, c);
+  }
+  const parentOf = parentMapFromRoot(doc.components);
 
   let cursor = parentOf.get(selectedId);
   while (cursor !== undefined) {

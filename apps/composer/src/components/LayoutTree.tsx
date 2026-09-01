@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { TreeNode } from '../lib/surface-doc';
 import { ROOT_ID, canMoveTo, componentTree } from '../lib/surface-doc';
 import type { TreeDropZone } from '../lib/tree-drop';
@@ -27,6 +27,18 @@ function TreeRow({ node, depth, dnd }: { node: TreeNode; depth: number; dnd: Tre
   const store = useStore();
   const state = useComposerState();
   const selected = state.selectedComponentId === node.id;
+  // Tree follows the selection (contract §7 ancestor honing): whenever this
+  // node BECOMES the selection — canvas tap, repeat-tap cycling step,
+  // breadcrumb, ↑ parent button — scroll it into view so the hierarchy is
+  // one glance away. block:'nearest' + no smooth behavior keeps it cheap and
+  // deterministic; jsdom has no scrollIntoView, hence the typeof guard.
+  const nodeRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    const el = nodeRef.current;
+    if (selected && el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selected]);
   const indicator = dnd.indicator?.rowId === node.id ? dnd.indicator : null;
   const showLineBefore = indicator?.valid === true && indicator.zone === 'before';
   const showLineAfter = indicator?.valid === true && indicator.zone === 'after';
@@ -52,6 +64,7 @@ function TreeRow({ node, depth, dnd }: { node: TreeNode; depth: number; dnd: Tre
         onDrop={(e) => dnd.onRowDrop(node, e)}
       >
         <button
+          ref={nodeRef}
           className={`tree-node ${node.container ? 'container' : 'leaf'} ${
             selected ? 'selected' : ''
           } ${dropInto ? 'drop-into' : ''}`}

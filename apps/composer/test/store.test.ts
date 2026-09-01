@@ -486,3 +486,80 @@ describe('sidecar v2 payloads', () => {
     expect(store.getState().propSpecs).toBeNull();
   });
 });
+
+describe('repeat-tap ancestor cycling (contract §7 ancestor honing)', () => {
+  // welcome doc chain from the CTA label:
+  // welcome-cta-label → welcome-cta → welcome-body → welcome-card → root
+  const CHAIN = ['welcome-cta-label', 'welcome-cta', 'welcome-body', 'welcome-card', 'root'];
+
+  it('same-spot taps walk the inclusive chain up and wrap to the deepest', () => {
+    const { store } = makeStore();
+    for (const expected of CHAIN) {
+      store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+      expect(store.getState().selectedComponentId).toBe(expected);
+    }
+    // Past root wraps back to the deepest hit.
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    expect(store.getState().selectedComponentId).toBe('welcome-cta-label');
+  });
+
+  it('each cycled step re-sends SET_SELECTION so the outline moves', () => {
+    const { store, sentSelections } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    expect(sentSelections.slice(-3)).toEqual(['welcome-cta-label', 'welcome-cta', 'welcome-body']);
+  });
+
+  it('a different hit id resets to a fresh deepest select', () => {
+    const { store } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' }); // welcome-cta
+    store.actions.bridgeSelect({ id: 'welcome-title' });
+    expect(store.getState().selectedComponentId).toBe('welcome-title');
+    // And the new spot starts its own cycle.
+    store.actions.bridgeSelect({ id: 'welcome-title' });
+    expect(store.getState().selectedComponentId).toBe('welcome-body');
+  });
+
+  it('a background tap deselects and resets the cycle', () => {
+    const { store } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    store.actions.bridgeSelect({ id: null });
+    expect(store.getState().selectedComponentId).toBeNull();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    expect(store.getState().selectedComponentId).toBe('welcome-cta-label'); // fresh, not cycled
+  });
+
+  it('a selection made elsewhere (tree/breadcrumb) outside the chain makes the next tap fresh', () => {
+    const { store } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    store.actions.selectComponent('welcome-title'); // tree click, not in the label's chain
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    expect(store.getState().selectedComponentId).toBe('welcome-cta-label');
+  });
+
+  it('a selection made elsewhere INSIDE the chain continues cycling from there', () => {
+    const { store } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    store.actions.selectComponent('welcome-body'); // breadcrumb jump into the chain
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    expect(store.getState().selectedComponentId).toBe('welcome-card');
+  });
+
+  it('doc changes that remove the hit id reset the cycle', () => {
+    const { store } = makeStore();
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    store.actions.clearCanvas(); // welcome ids gone
+    store.actions.undo(); // ids are back, but the cycle must not resume
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    expect(store.getState().selectedComponentId).toBe('welcome-cta-label');
+  });
+
+  it('preview mode still ignores SELECT entirely', () => {
+    const { store } = makeStore();
+    store.actions.setMode('preview');
+    store.actions.bridgeSelect({ id: 'welcome-cta-label' });
+    expect(store.getState().selectedComponentId).toBeNull();
+  });
+});

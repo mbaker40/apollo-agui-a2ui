@@ -4,10 +4,15 @@
  * to generic JSON rows when no specs ever arrive (official sample renderer).
  * All prop names/values from specs and docs are DATA — rendered as text only.
  */
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { PropSpec } from '../lib/bridge-host';
 import type { DocComponent } from '../lib/surface-doc';
-import { GUARDED_PROP_KEYS, ROOT_ID, singleSlotParentOf } from '../lib/surface-doc';
+import {
+  GUARDED_PROP_KEYS,
+  ROOT_ID,
+  ancestorChainOf,
+  singleSlotParentOf,
+} from '../lib/surface-doc';
 import { useComposerState, useStore } from '../state/context';
 import type { ActionResult } from '../state/store';
 
@@ -414,6 +419,13 @@ export function Inspector() {
 
   const slotParent = singleSlotParentOf(state.doc, selectedId);
   const isRoot = selectedId === ROOT_ID;
+  // Ancestor honing (contract §7): the deepest-first inclusive chain, shown
+  // root-first as a breadcrumb; chain[1] is the parent for the ↑ button.
+  const chain = ancestorChainOf(state.doc, selectedId);
+  const path = [...chain].reverse();
+  const parentId = chain[1] ?? null;
+  const typeOf = (id: string) =>
+    state.doc.components.find((c) => c.id === id)?.component ?? '(missing)';
   const deleteDisabled = isRoot || slotParent !== null;
   const deleteHint = isRoot
     ? 'The root component cannot be deleted — clear the canvas instead.'
@@ -475,20 +487,66 @@ export function Inspector() {
 
   return (
     <div className="inspector" data-testid="inspector">
+      <nav
+        className="inspector-breadcrumb"
+        data-testid="inspector-breadcrumb"
+        aria-label="Ancestor path"
+      >
+        {path.map((crumbId, i) => {
+          const current = crumbId === selectedId;
+          return (
+            <Fragment key={crumbId}>
+              {i > 0 && (
+                <span className="crumb-sep" aria-hidden>
+                  ›
+                </span>
+              )}
+              <button
+                className={`crumb ${current ? 'current' : ''}`}
+                data-testid={`crumb-${crumbId}`}
+                title={`#${crumbId}`}
+                disabled={current}
+                aria-current={current ? 'true' : undefined}
+                onClick={() => store.actions.selectComponent(crumbId)}
+              >
+                {crumbId === ROOT_ID ? ROOT_ID : typeOf(crumbId)}
+              </button>
+            </Fragment>
+          );
+        })}
+      </nav>
       <header className="inspector-header">
         <div className="inspector-title">
           <span className="inspector-type">{component.component}</span>
           <span className="inspector-id mono">#{selectedId}</span>
         </div>
-        <button
-          className="danger"
-          data-testid="inspector-delete"
-          disabled={deleteDisabled}
-          title={deleteHint}
-          onClick={() => store.actions.deleteSelected()}
-        >
-          Delete
-        </button>
+        <div className="inspector-actions">
+          <button
+            className="icon-button"
+            data-testid="inspector-parent"
+            disabled={parentId === null}
+            title={
+              parentId === null
+                ? 'No parent to select'
+                : `Select the parent (${typeOf(parentId)} #${parentId})`
+            }
+            aria-label="Select parent component"
+            onClick={() => {
+              if (parentId !== null) store.actions.selectComponent(parentId);
+            }}
+          >
+            ↑
+          </button>
+          <button
+            className="danger"
+            data-testid="inspector-delete"
+            disabled={deleteDisabled}
+            title={deleteHint}
+            onClick={() => store.actions.deleteSelected()}
+          >
+            Delete
+          </button>
+        </div>
       </header>
       {deleteDisabled && !isRoot && (
         <p className="hint inspector-delete-hint" data-testid="inspector-delete-hint">

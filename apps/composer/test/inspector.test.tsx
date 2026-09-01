@@ -306,3 +306,34 @@ describe('Inspector no-specs fallback', () => {
     expect('children' in component(store, 'card')).toBe(false);
   });
 });
+
+describe('ancestor breadcrumb + parent button (contract §7 ancestor honing)', () => {
+  it('renders the full root-first path with the current chip disabled', () => {
+    const { store } = setup();
+    act(() => store.actions.selectComponent('cardBody'));
+    const crumbs = ['crumb-root', 'crumb-card', 'crumb-cardBody'].map((t) => screen.getByTestId(t));
+    expect(crumbs.map((c) => c.textContent)).toEqual(['root', 'Card', 'Column']);
+    expect((crumbs[2] as HTMLButtonElement).disabled).toBe(true);
+    expect((crumbs[0] as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('clicking a crumb selects that ancestor', () => {
+    const { store } = setup();
+    act(() => store.actions.selectComponent('cardBody'));
+    act(() => {
+      fireEvent.click(screen.getByTestId('crumb-card'));
+    });
+    expect(store.getState().selectedComponentId).toBe('card');
+  });
+
+  it('the ↑ parent button selects the parent and disables on root', () => {
+    const { store } = setup();
+    act(() => store.actions.selectComponent('cardBody'));
+    act(() => {
+      fireEvent.click(screen.getByTestId('inspector-parent'));
+    });
+    expect(store.getState().selectedComponentId).toBe('card');
+    act(() => store.actions.selectComponent('root'));
+    expect((screen.getByTestId('inspector-parent') as HTMLButtonElement).disabled).toBe(true);
+  });
+});

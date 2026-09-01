@@ -267,3 +267,19 @@ describe('dropping', () => {
     expect(row.className).not.toContain('no-drop');
   });
 });
+
+describe('tree follows the selection (contract §7 ancestor honing)', () => {
+  it('scrolls the newly selected node into view', () => {
+    const spy = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = spy;
+    try {
+      const store = setup();
+      act(() => store.actions.selectComponent('welcome-text'));
+      expect(spy).toHaveBeenCalledWith({ block: 'nearest' });
+    } finally {
+      if (original) Element.prototype.scrollIntoView = original;
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+});

@@ -5,6 +5,7 @@ import {
   GUARDED_PROP_KEYS,
   ROOT_ID,
   SURFACE_ID,
+  ancestorChainOf,
   canMoveTo,
   componentTree,
   emptyDoc,
@@ -828,5 +829,71 @@ describe('listContainers / componentTree', () => {
     expect(a.id).toBe('a');
     expect(a.children.map((n) => n.id)).toEqual(['b']);
     expect(a.children[0]!.children).toEqual([]);
+  });
+});
+
+describe('ancestorChainOf', () => {
+  it('is deepest-first, inclusive, and ends at root', () => {
+    const doc = nestedDoc();
+    expect(ancestorChainOf(doc, 'txt')).toEqual(['txt', ROOT_ID]);
+    expect(ancestorChainOf(doc, 'cardBody')).toEqual(['cardBody', 'card', ROOT_ID]);
+  });
+
+  it('hops single slots exactly like the tree: Card child, Tabs panes, Modal trigger/content', () => {
+    const doc = nestedDoc();
+    // Card's text: Text → its Column body → through the Card `child` slot → root
+    expect(ancestorChainOf(doc, 'inner')).toEqual(['inner', 'cardBody', 'card', ROOT_ID]);
+    // Tabs pane: through `tabs[].child`
+    expect(ancestorChainOf(doc, 'paneA')).toEqual(['paneA', 'tabs', ROOT_ID]);
+    // Modal usage: Button label → Button `child` → Modal `trigger` → Column → root
+    const modal = insertUsage(emptyDoc(), MODAL_USAGE);
+    expect(ancestorChainOf(modal, 'demo-btn-label-g1')).toEqual([
+      'demo-btn-label-g1',
+      'demo-btn-g1',
+      'demo-modal-g1',
+      'root-g1',
+      ROOT_ID,
+    ]);
+    expect(ancestorChainOf(modal, 'demo-content-g1')).toEqual([
+      'demo-content-g1',
+      'demo-modal-g1',
+      'root-g1',
+      ROOT_ID,
+    ]);
+  });
+
+  it("root's chain is just itself; unknown ids yield an empty array", () => {
+    const doc = nestedDoc();
+    expect(ancestorChainOf(doc, ROOT_ID)).toEqual([ROOT_ID]);
+    expect(ancestorChainOf(doc, 'no-such-id')).toEqual([]);
+    expect(ancestorChainOf(emptyDoc(), '')).toEqual([]);
+  });
+
+  it('is cycle-guarded: a reference cycle still terminates at root', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['a'] },
+      { id: 'a', component: 'Column', children: ['b'] },
+      { id: 'b', component: 'Column', children: ['a'] }, // b → a → b …
+    ]);
+    expect(ancestorChainOf(doc, 'b')).toEqual(['b', 'a', ROOT_ID]);
+    expect(ancestorChainOf(doc, 'a')).toEqual(['a', ROOT_ID]);
+  });
+
+  it('resolves multi-parent ids to the first parent found (BFS from root, list order)', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['x', 'y'] },
+      { id: 'x', component: 'Column', children: ['shared'] },
+      { id: 'y', component: 'Column', children: ['shared'] }, // second referrer loses
+      { id: 'shared', component: 'Text', text: 's' },
+    ]);
+    expect(ancestorChainOf(doc, 'shared')).toEqual(['shared', 'x', ROOT_ID]);
+  });
+
+  it('stops at a component unreachable from root (no discovered parent)', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: [] },
+      { id: 'orphan', component: 'Text', text: 'x' },
+    ]);
+    expect(ancestorChainOf(doc, 'orphan')).toEqual(['orphan']);
   });
 });

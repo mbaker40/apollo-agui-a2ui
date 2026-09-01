@@ -35,6 +35,7 @@ import {
 import type { InsertTarget, SurfaceDoc } from '../lib/surface-doc';
 import {
   ROOT_ID,
+  ancestorChainOf,
   canMoveTo,
   emptyDoc,
   insertTargetFor,
@@ -276,6 +277,15 @@ export interface ComposerActions {
 export function createComposerStore(options: ComposerStoreOptions = {}): ComposerStore {
   let port: RenderPort | null = null;
   let canvasDnd: CanvasDndSurface | null = null;
+  /**
+   * The last COMPOSERX_SELECT hit id — the seed of repeat-tap ancestor
+   * cycling (contract §7 ancestor honing). Internal bookkeeping, not React
+   * state: nothing renders from it. Invariant: it always names a component
+   * in the CURRENT doc (or is null) — bridgeSelect only stores ids the doc
+   * contains, and doc changes that remove it reset it, so a later reuse of
+   * the same id can never masquerade as a repeat tap.
+   */
+  let lastCanvasHitId: string | null = null;
   let eventId = 0;
   let toastId = 0;
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -353,10 +363,26 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     return { patch: { selectedComponentId: null }, cleared: true };
   }
 
+  /**
+   * Doc changes that remove the last canvas hit id reset the repeat-tap
+   * cycle (contract §7 ancestor honing): a doc where the id later reappears
+   * (undo/redo, JSON or chat apply) is a NEW component as far as tap
+   * cycling is concerned — treating the next tap on it as a repeat could
+   * jump straight to an ancestor the user never cycled to. Ids that survive
+   * the change keep the cycle alive (the chain is recomputed against the
+   * current doc on every SELECT, so structural changes stay safe).
+   */
+  function reconcileCanvasHit(doc: SurfaceDoc): void {
+    if (lastCanvasHitId !== null && !doc.components.some((c) => c.id === lastCanvasHitId)) {
+      lastCanvasHitId = null;
+    }
+  }
+
   /** Applies a mutated doc: snapshot for undo, clear redo, re-send RENDER_A2UI. */
   function applyDoc(doc: SurfaceDoc, label: string): void {
     const undoStack = [...state.undoStack, structuredClone(state.doc)];
     while (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    reconcileCanvasHit(doc);
     const selection = reconcileSelection(doc);
     set({
       doc,
@@ -374,6 +400,7 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
   }
 
   function restoreDoc(doc: SurfaceDoc, patch: Partial<ComposerState>, label: string): void {
+    reconcileCanvasHit(doc);
     const selection = reconcileSelection(doc);
     set({
       doc,
@@ -452,8 +479,39 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       // Belt over the catalog's suspenders: in preview mode canvas clicks
       // are live component interactions, never selection (§4c).
       if (state.mode === 'preview') return;
-      const id = payload && typeof payload === 'object' ? payload.id : null;
-      actions.selectComponent(typeof id === 'string' ? id : null);
+      const raw = payload && typeof payload === 'object' ? payload.id : null;
+      const id = typeof raw === 'string' ? raw : null;
+      if (id === null) {
+        // Background tap: deselect as always AND reset the repeat-tap cycle.
+        lastCanvasHitId = null;
+        actions.selectComponent(null);
+        return;
+      }
+      // Repeat-tap ancestor cycling (contract §7 ancestor honing): the
+      // catalog always posts the DEEPEST hit, so tapping the same spot again
+      // while the selection sits somewhere in that hit's inclusive ancestor
+      // chain hones one ancestor up — deepest → … → root, then wraps back
+      // to the deepest. The chain-membership check doubles as the reset for
+      // selections made elsewhere in the meantime (tree, breadcrumb,
+      // Escape): a selection outside the chain (or none) makes this a fresh
+      // select. The chain hops the same edges as the tree (children arrays
+      // AND child/trigger/content/tabs[].child slots) and is recomputed
+      // against the current doc on every tap, so it is never stale.
+      const chain = ancestorChainOf(state.doc, id);
+      const selected = state.selectedComponentId;
+      if (id === lastCanvasHitId && selected !== null && chain.includes(selected)) {
+        // One ancestor up from the CURRENT selection; past the top (root, or
+        // a parentless orphan) wrap back to the deepest hit itself. Each
+        // step goes through selectComponent, so SET_SELECTION re-sends and
+        // the canvas outline shows the layer the user is on.
+        const next = chain[chain.indexOf(selected) + 1] ?? id;
+        actions.selectComponent(next);
+        return; // lastCanvasHitId already === id
+      }
+      // Fresh select. Only ids present in the current doc seed the cycle
+      // (chain is [] for stale ids — selectComponent ignores those anyway).
+      lastCanvasHitId = chain.length > 0 ? id : null;
+      actions.selectComponent(id);
     },
     bridgePropSpecs(payload) {
       const components =
@@ -477,6 +535,11 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     // start moves in preview mode in the first place.
     bridgeMoveStart(payload) {
       if (state.mode === 'preview') return;
+      // A move gesture breaks the tap rhythm: it suppresses its own SELECT
+      // and re-homes the layout, so continuing an older repeat-tap cycle
+      // across it (the lift anchor usually sits IN the old hit's chain)
+      // would jump to an ancestor the user never tapped toward. Reset.
+      lastCanvasHitId = null;
       log('lifecycle', `COMPOSERX_MOVE_START — lifting "${payload.id}"`);
       // autoView false: the §4e drag is still in flight inside the iframe —
       // hiding the canvas view now would leave the user dropping blind

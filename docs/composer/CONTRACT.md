@@ -136,7 +136,7 @@ Catalog → composer, once after `RENDERER_READY`:
 
 ```ts
 { type: 'COMPOSERX_SIDECAR_READY',
-  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move', 'multi-select'], version: 4 } }
+  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move', 'multi-select', 'group-move'], version: 5 } }
 ```
 
 (Version 1 announced `['dnd-hittest']` only; version 2 lacked `'move'`. The
@@ -322,6 +322,45 @@ overlay); only three messages cross the frame:
   `'move'` feature → no canvas move; the layout-tree drag (§7) is the
   fallback.
 
+**Group move (feature `'group-move'`, sidecar v5)** — the Figma behavior:
+pressing a component that is a **member of the current multi-selection**
+lifts the whole selection; pressing a non-member keeps today's behavior
+(collapse to a single move). Backward-tolerant message extension — the
+three §4e messages gain an optional `ids`:
+
+```ts
+{ type: 'COMPOSERX_MOVE_START', payload: { id, ids?: string[] } }
+{ type: 'COMPOSERX_MOVE_DROP',  payload: { id, containerId, index, slot, ids?: string[] } }
+// MOVE_CANCEL unchanged. A v4 composer ignores ids (single move of id);
+// the catalog sends ids ONLY when a group lift happened.
+```
+
+- **Group-lift decision (catalog)**: resolve the lift anchor as in §4e;
+  if that anchor is in the ids of the last received
+  `COMPOSERX_SET_SELECTION` AND that list has ≥ 2 entries → group lift
+  with `ids` = that list (the pressed anchor stays `id`, the grab
+  handle). Otherwise single lift exactly as before. Long-press/threshold
+  timing is unchanged (§4f): press-and-hold still toggles; only an
+  immediate drag lifts.
+- **During a group drag** the catalog dims EVERY moved origin rect,
+  excludes EVERY moved subtree from target resolution, and labels the
+  ghost with the count (e.g. "3 components"). The emitted `index` is the
+  position after ALL moved ids are removed (the excluded view makes this
+  automatic, as in §4e).
+- **Composer semantics on `MOVE_DROP` with `ids`**: filter `ids` to the
+  current doc, reduce by subsumption (a selected proper ancestor carries
+  its selected descendants), skip unmovable members (root, single-slot
+  occupants — reported via the toast, like group delete), keep the rest
+  in **document order**, and apply `moveComponents` (§5): all removed,
+  then inserted as one **contiguous run** at the resolved index — ONE
+  undo snapshot. If the effective set is empty or the target is invalid
+  for the group, the drop is refused (log; doc untouched). `MOVE_START`
+  with `ids` does NOT collapse the selection (it stays the group).
+- **Tree drag** follows the same rule: dragging a row that is in the
+  multi-selection group-moves the whole selection (pre-removal tree
+  indexes adjusted for every moved id above the target in the same
+  container); dragging an unselected row collapses and moves just it.
+
 ### 4f. Marquee + multi-select (feature `'multi-select'`, edit mode)
 
 The selection becomes a **list**; the composer stays authoritative. Three
@@ -374,10 +413,12 @@ re-sends SET_SELECTION with `{id: primary, ids}`.
 **Delete** (all deletable selected ids in ONE undo snapshot — descendants
 of another selected id are subsumed, single-slot occupants are skipped
 and reported via toast/hint, testid `inspector-multi-delete`) and a
-Clear-selection button. Prop editing, canvas move, and tree reordering
-remain **single-selection** in this wave: starting a §4e lift or a tree
-drag with a multi-selection first collapses the selection to the pressed
-component. Glossary insert targets derive from the primary.
+Clear-selection button. Prop editing remains single-selection.
+**Moving is group-aware** (§4e group move): a §4e lift or a tree drag on
+a MEMBER of the multi-selection moves the whole selection as one
+contiguous run (one undo step); on a non-member it collapses to the
+pressed component and moves just it. Glossary insert targets derive from
+the primary.
 
 ## 5. Composer surface document + editing ops
 
@@ -434,6 +475,19 @@ Composer state (single source of truth) is a `SurfaceDoc`:
   (would orphan the branch). `canMoveTo(doc, id, containerId)` exposes the
   same checks as `{ok: true} | {ok: false, reason}` for UI affordances —
   both drag surfaces consult it instead of try/catching.
+- **Group move op** (§4e group move + tree group drag):
+  `moveComponents(doc, ids, containerId, index)` — the plural of
+  `moveComponent` with the same target rules. Effective set: `ids`
+  filtered to the doc, subsumption-reduced (a proper ancestor in the set
+  carries its descendants), unmovable members (root, single-slot
+  occupants) split out as `skipped`, remainder kept in **document
+  order**. All effective ids are spliced out first, then inserted as one
+  contiguous run at `index` interpreted **after every removal**
+  (clamped). Refusals (throw): empty effective set; a `containerId`
+  outside the container set, unknown, or inside ANY moved subtree.
+  Returns the new doc plus the `skipped` list so callers can toast.
+  `canMoveGroupTo(doc, ids, containerId)` exposes the same checks for UI
+  affordances. Exactly ONE undo snapshot per applied group move.
 - Undo/redo: bounded snapshot stack of serialized docs (50 entries) —
   every applied insert/JSON-apply/chat-apply/prop-commit/remove/move
   pushes one.

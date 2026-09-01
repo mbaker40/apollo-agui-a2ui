@@ -136,7 +136,7 @@ Catalog → composer, once after `RENDERER_READY`:
 
 ```ts
 { type: 'COMPOSERX_SIDECAR_READY',
-  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move'], version: 3 } }
+  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move', 'multi-select'], version: 4 } }
 ```
 
 (Version 1 announced `['dnd-hittest']` only; version 2 lacked `'move'`. The
@@ -315,6 +315,63 @@ overlay); only three messages cross the frame:
   `'move'` feature → no canvas move; the layout-tree drag (§7) is the
   fallback.
 
+### 4f. Marquee + multi-select (feature `'multi-select'`, edit mode)
+
+The selection becomes a **list**; the composer stays authoritative. Three
+message changes (all backward-tolerant — a v3 catalog simply never sends
+or reads the new fields):
+
+```ts
+// catalog → composer: click/tap select gains an additive flag
+{ type: 'COMPOSERX_SELECT', payload: { id: string | null, additive?: boolean } }
+// additive=true when shift is held during the click, OR on a touch
+// long-press (~350ms press without crossing the 5px move threshold —
+// checked BEFORE the §4e lift starts; a long-press therefore never lifts).
+
+// catalog → composer: marquee result on pointerup
+{ type: 'COMPOSERX_MARQUEE', payload: { ids: string[] } }   // [] clears
+
+// composer → catalog: outline every selected id
+{ type: 'COMPOSERX_SET_SELECTION', payload: { id: string | null, ids?: string[] } }
+// `id` stays the primary (back-compat: a v3 catalog outlines just it);
+// a v4 catalog outlines every id in `ids`, the primary emphasized
+// (2px solid accent) and the rest lighter (1.5px solid, 70% accent).
+```
+
+**Marquee gesture** (edit mode, veil-owned, mouse and touch alike):
+pointerdown on the **background** (deepest hit null) + movement past the
+5px threshold starts a marquee; a sub-threshold background pointerup
+stays the existing deselect click. During the drag the catalog draws the
+rubber band (1px solid accent border, ~8% accent fill — solid, NOT
+dashed: dashed is reserved for drop indicators) and live-highlights the
+current candidates; Escape or pointercancel aborts (no message). On
+pointerup it posts `COMPOSERX_MARQUEE` with the candidate ids.
+
+**Candidate rule (topmost-intersecting)**: candidates are components
+whose rect intersects the marquee rect, MINUS any whose ancestor (via
+the full reference edges) is itself a candidate — sweeping across a Card
+yields the Card, never the Card plus its subtree. The root component is
+never a candidate. Order: document order (flat-list order).
+
+**Composer semantics**: selection state is `selectedComponentIds:
+string[]` (ordered, deduped; primary = first). `additive` SELECT toggles
+the id in/out of the list; plain SELECT replaces the list with `[id]`
+(the §7 repeat-tap ancestor cycling applies ONLY to plain single
+selects). MARQUEE replaces the list. Escape and background click clear
+the whole list. Doc changes filter out stale ids. Every selection change
+re-sends SET_SELECTION with `{id: primary, ids}`.
+
+**Multi-aware surfaces**: the tree highlights every selected row
+(shift-click toggles there too); the inspector shows a multi-state
+("N selected" + component-type summary, testid `inspector-multi`) with
+**Delete** (all deletable selected ids in ONE undo snapshot — descendants
+of another selected id are subsumed, single-slot occupants are skipped
+and reported via toast/hint, testid `inspector-multi-delete`) and a
+Clear-selection button. Prop editing, canvas move, and tree reordering
+remain **single-selection** in this wave: starting a §4e lift or a tree
+drag with a multi-selection first collapses the selection to the pressed
+component. Glossary insert targets derive from the primary.
+
 ## 5. Composer surface document + editing ops
 
 Composer state (single source of truth) is a `SurfaceDoc`:
@@ -445,8 +502,11 @@ insert target derives from it: the selected component if it's a
 children-array container, else its nearest container ancestor, else root.
 Selecting auto-switches the right sidebar to **Design**; Escape or a
 background click deselects. Stale ids (after undo/JSON apply/chat apply)
-clear the selection. **This is a single-selection model** — marquee /
-multi-select is explicitly out of scope (a separate milestone if wanted).
+clear the selection. The selection is a **list** (§4f): marquee from
+empty canvas, shift-click (web) / long-press (touch) toggling, and
+shift-click in the tree build multi-selections; the inspector's
+multi-state carries the group Delete. Prop editing, canvas move, and
+tree reordering operate on the primary/single selection only.
 
 **Ancestor honing** (parents are otherwise untappable — a canvas tap
 always hits the deepest component). Three mechanisms, composer-side only

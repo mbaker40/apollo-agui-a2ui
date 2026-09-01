@@ -192,3 +192,20 @@ the same way:
   stays a fully interactive standard renderer under COMPOSERX-unaware hosts
   (official hosted composer); our composer switches it to edit in every
   handshake.
+
+### Moving placed components addendum
+
+- Units: composer 218 vitest tests (moveComponent/canMoveTo semantics incl.
+  the canonical after-removal reorder `[a,b,c]` a→index 2 → `[b,c,a]`,
+  tree-drop thirds resolution, MOVE_* routing/store flows), catalog 77
+  (lift-anchor climb, subtree-excluded target resolution, veil gesture
+  flows: sub-threshold click stays SELECT, threshold drag posts
+  MOVE_START/DROP with no SELECT, Escape cancels).
+- Live Playwright drive (5 checks): a REAL mouse press-drag inside the
+  canvas moved the welcome CTA above the title (mid-drag ghost + dimmed
+  origin + dashed indicators captured in `composer-canvas-move.png`;
+  visual order asserted by bounding boxes), one undo restored the order;
+  a layout-tree drag moved a row via the upper-third zone with the dashed
+  insertion indicator shown (`composer-tree-drag.png`); dragging the Card
+  onto its own child Column rendered no-drop and the refused drop left
+  the document byte-identical.

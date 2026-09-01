@@ -2,9 +2,11 @@
 
 Custom-styled React **basic catalog renderer** for the A2UI composer. Runs in a
 sandboxed iframe and speaks the official A2UI Preview Bridge protocol (via the
-vendored `packages/a2ui-bridge`), plus the additive `COMPOSERX_*` drag-and-drop
-sidecar defined in [`docs/composer/CONTRACT.md`](../../docs/composer/CONTRACT.md)
-(section 4). Dev port: **7465**.
+vendored `packages/a2ui-bridge`), plus the additive `COMPOSERX_*` **sidecar v2**
+defined in [`docs/composer/CONTRACT.md`](../../docs/composer/CONTRACT.md)
+(sections 4, 4b, 4c, 4d): drag-and-drop hit-testing with Figma-like dashed drop
+indicators, edit/preview modes with click-to-select and selection outlines, and
+schema-derived prop specs. Dev port: **7465**.
 
 ## Quickstart
 
@@ -65,33 +67,110 @@ var(--a2ui-border))`). `basicCatalog.themeSchema` is **undefined** in 0.10.2,
   sample we configure no markdown renderer, so it renders as plain text (the
   package logs a one-time console warning).
 
-## COMPOSERX DnD sidecar
+## COMPOSERX sidecar v2
 
-Message shapes and semantics: contract section 4. Split into:
+Message shapes and semantics: contract sections 4/4b/4c/4d. Features
+announced right after the bridge handshake:
+
+```ts
+{ type: 'COMPOSERX_SIDECAR_READY',
+  payload: { features: ['dnd-hittest', 'select', 'prop-specs'], version: 2 } }
+```
+
+immediately followed by `COMPOSERX_PROP_SPECS` (section 4d, below). Both are
+posted from an `App` effect that runs directly after `useA2uiSandbox`'s
+effect, so they always follow `RENDERER_READY`. Under React StrictMode (dev)
+everything is emitted twice — hosts must tolerate duplicates (the official
+shell does). Split into:
 
 - `src/sidecar-math.ts` — pure logic, unit-tested: mirrors the component tree
   from `RENDER_A2UI` traffic (createSurface resets, updateComponents upserts,
   deleteSurface clears) and resolves `{x, y, hitId}` into
   `{targetId, containerId, index, slot, rect}`:
-  - container hit (Row/Column/List/Card/Tabs/Modal) → `slot: 'into'`, index
+  - children-array container hit (Row/Column/List) → `slot: 'into'`, index
     between children along the container's main axis (Row / horizontal List →
     x, otherwise y), caret rect in the gap (or inset interior rect when the
     container has no children);
-  - leaf hit → walk up to the nearest ancestor with a `children` array; the
-    path child is the anchor; `before`/`after` by pointer vs anchor midpoint,
-    caret rect at the anchor's edge;
+  - leaf hit (including single-slot Card/Button/Modal/Tabs) → walk up to the
+    nearest ancestor with a `children` array; the path child is the anchor;
+    `before`/`after` by pointer vs anchor midpoint, caret rect at the
+    anchor's edge;
   - background / empty canvas → `'into'` the root (`targetId: null`).
+- `src/prop-specs.ts` — pure derivation of per-component `PropSpec[]` from
+  the REAL zod schemas (see "Prop specs" below).
 - `src/sidecar.ts` — DOM plumbing, started from `main.tsx`: origin-checked
   message listener (`DomainOriginVerificationService`, same rules as the
   bridge), hit-testing, `COMPOSERX_DND_TARGET` replies posted to the same
-  target origin the bridge uses (`?origin=` param, else our own origin), and
-  the drop indicator itself (a `position: fixed` overlay layer that can never
-  feed back into `SURFACE_RESIZE` measurements; cleared on
-  `COMPOSERX_DND_END` and on new `RENDER_A2UI`).
-- `COMPOSERX_SIDECAR_READY {features: ['dnd-hittest'], version: 1}` is posted
-  from an `App` effect that runs directly after `useA2uiSandbox`'s effect, so
-  it always follows `RENDERER_READY`. Under React StrictMode (dev) both are
-  emitted twice — hosts must tolerate duplicates (the official shell does).
+  target origin the bridge uses (`?origin=` param, else our own origin), the
+  edit veil, and the indicator/outline overlay layers (all `position: fixed`
+  with `overflow: hidden` and `pointer-events: none`, so they can never feed
+  back into `SURFACE_RESIZE` measurements).
+
+### Edit/preview modes + selection (contract 4c)
+
+- `COMPOSERX_SET_MODE {mode: 'edit' | 'preview'}` — **default is `preview`** (a
+  COMPOSERX-unaware host like the official hosted composer gets a fully
+  interactive standard renderer)
+  before any message arrives. Mode switches are idempotent.
+- **Edit mode** installs a transparent full-viewport **edit veil**
+  (`pointer-events: auto`, stacked above the surface and below the indicator
+  layers) that swallows every pointer interaction: Buttons cannot fire their
+  actions, TextFields cannot be focused or typed into (a capture-phase
+  `focusin` guard also blurs anything that acquires focus by keyboard).
+  Clicks hit-test through the veil with `document.elementsFromPoint`,
+  skipping the sidecar's own layers, and post
+  `COMPOSERX_SELECT {id: <deepest data-a2ui-id> | null}` (null = background
+  click). Moving the pointer draws a local, rAF-throttled 1px accent hover
+  outline (no messages).
+- `COMPOSERX_SET_SELECTION {id | null}` (the composer is the source of
+  truth) renders a **solid 2px accent outline, offset 1px** around the
+  component's rect. It re-anchors after every `RENDER_A2UI` (re-measured on
+  chained timeouts + animation frames, because the bridge defers
+  `createSurface` remounts by a macrotask), on window resize/scroll, and via
+  a `ResizeObserver` on the selected component's first box. If the id no
+  longer renders, the outline is removed.
+- **Preview mode** removes the veil and all hover/selection outlines;
+  components behave fully live (actions → `SEND_TO_SERVER`). The selection
+  id is retained sidecar-side and redrawn on the next switch to edit.
+- Note: the mode default means a host that never speaks COMPOSERX (e.g. the
+  official hosted composer) gets an inert canvas — that is the contract's
+  deliberate default; our composer re-sends the mode on every handshake.
+
+### Dashed drop indicators (contract 4b)
+
+Drawn by the catalog during a drag, all in brand-accent tokens (theme-aware
+in light and dark), cleared on `COMPOSERX_DND_END`:
+
+- `'before'`/`'after'` → a **2px dashed accent insertion line** with small
+  dot end-caps at the caret rect, plus a **faint 1px dashed outline** around
+  the container being spliced into;
+- `'into'` → a **2px dashed accent outline (6px radius)** around the
+  container rect with a very light accent wash inside;
+- no target → nothing.
+
+### Prop specs (contract 4d)
+
+`src/prop-specs.ts` walks each catalog component's zod schema (the branded
+wrapper preserves `name`+`schema` from `@a2ui/web_core`'s ComponentApi
+objects) and posts, once after `SIDECAR_READY`:
+
+```ts
+{ type: 'COMPOSERX_PROP_SPECS', payload: { components: { [name]: { props: PropSpec[] } } } }
+```
+
+Derivation (verified against the actually-installed zod@3.25.76 classic v3
+API — `_def.typeName` internals — with a best-effort zod-v4 fallback):
+unwrap Optional/Default/Nullable (`required` = never optional/defaulted);
+ZodString/Number/Boolean → that kind; ZodEnum → `'enum'` + options; a union
+of one scalar kind with a `{path}` object (DynamicString/Number/Boolean,
+nested unions flattened) → the scalar kind + `bindable: true`; everything
+else (records, `action` unions, arrays like `checks`/`options`/`tabs`,
+accessibility objects, DynamicStringList) → `'json'` (still `bindable` when
+a `{path}` member exists). `children`/`child`/`trigger`/`content`/`tabs`
+are marked `containment: true`. The derivation never throws: weird props
+fall back to `'json'`, components without a usable object schema are
+skipped. Fun fact: Icon's `name` derives as a 59-option enum that is also
+`bindable`, because its schema unions the icon-name enum with `{path}`.
 
 ### DOM → component-id mapping (the investigated part)
 
@@ -106,8 +185,10 @@ builds `brandedBasicCatalog`: every component render is wrapped in
 ```
 
 `display: contents` generates no box, so Row/Column/List flex layout is
-untouched (verified in-browser). Hit-testing is
-`document.elementFromPoint(x, y).closest('[data-a2ui-id]')`; rects come from
+untouched (verified in-browser). Hit-testing walks
+`document.elementsFromPoint(x, y)` (topmost first), skips the sidecar's own
+veil/overlay layers, and takes the first element's
+`closest('[data-a2ui-id]')` — i.e. the deepest component; rects come from
 the union of the wrapper's descendant boxes (the wrapper itself has none).
 The wrapped catalog is protocol-identical to the stock one: the message
 processor looks catalogs up by `id`, which the bridge re-stamps from

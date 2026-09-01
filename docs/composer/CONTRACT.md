@@ -215,7 +215,10 @@ catalog:
 { type: 'COMPOSERX_SET_SELECTION', payload: { id: string | null } }
 ```
 
-- Default mode (before any SET_MODE) is **`edit`**.
+- Default mode (before any SET_MODE) is **`preview`** — a COMPOSERX-unaware
+  host (the official hosted composer, §1) must get a fully interactive
+  standard renderer. Our composer sends `SET_MODE {mode:'edit'}` in every
+  post-ready handshake, so its canvas is in edit mode from first paint.
 - In **edit** mode the sidecar intercepts pointer interactions on the
   rendered surface in the capture phase (click AND mousedown-level
   suppression of component behavior — a Button must not fire its action, a

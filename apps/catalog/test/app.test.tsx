@@ -28,6 +28,7 @@ import {
   COMPOSERX_DND_END,
   COMPOSERX_DND_HOVER,
   COMPOSERX_DND_TARGET,
+  COMPOSERX_PROP_SPECS,
   COMPOSERX_SIDECAR_READY,
   destroyComposerxSidecar,
   initComposerxSidecar,
@@ -117,7 +118,7 @@ describe('ComposerX catalog app', () => {
     });
   }
 
-  it('dispatches RENDERER_READY then COMPOSERX_SIDECAR_READY on mount', async () => {
+  it('dispatches RENDERER_READY, then SIDECAR_READY v2, then PROP_SPECS on mount', async () => {
     const postSpy = vi.spyOn(window.parent, 'postMessage');
     await mountApp();
 
@@ -129,10 +130,19 @@ describe('ComposerX catalog app', () => {
     expect(postSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         type: COMPOSERX_SIDECAR_READY,
-        payload: { features: ['dnd-hittest'], version: 1 },
+        payload: { features: ['dnd-hittest', 'select', 'prop-specs'], version: 2 },
       }),
       window.location.origin,
     );
+
+    // Prop specs immediately follow the announcement (contract section 4d).
+    expect(types[sidecarIndex + 1]).toBe(COMPOSERX_PROP_SPECS);
+    const specsCall = postSpy.mock.calls[sidecarIndex + 1]?.[0] as {
+      payload: { components: Record<string, { props: unknown[] }> };
+    };
+    expect(specsCall.payload.components).toBeDefined();
+    expect(Object.keys(specsCall.payload.components)).toHaveLength(18);
+    expect(specsCall.payload.components['Button']?.props.length).toBeGreaterThan(0);
   });
 
   it('renders the waiting placeholder before payloads arrive', async () => {

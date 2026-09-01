@@ -477,6 +477,16 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     },
     commitProp(id, key, value) {
       try {
+        // Unchanged-value commits (e.g. Enter followed by the blur it causes)
+        // must not push an undo snapshot: one edit, one step.
+        const existing = state.doc.components.find((c) => c.id === id);
+        if (
+          existing &&
+          key in existing &&
+          JSON.stringify(existing[key]) === JSON.stringify(value)
+        ) {
+          return { ok: true };
+        }
         const doc = setComponentProp(state.doc, id, key, value);
         applyDoc(doc, `set ${id}.${key}`);
         return { ok: true };

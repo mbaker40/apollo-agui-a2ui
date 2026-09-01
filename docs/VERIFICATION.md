@@ -164,3 +164,31 @@ Deferred to the user:
   `pnpm --filter @mwe/composer-catalog dev` and paste
   `http://localhost:7465/` as the renderer URL (not exercised in-session —
   the hosted composer's origin wasn't reachable through the session proxy).
+
+### Figma-mode editing addendum
+
+The second composer milestone (visual glossary tiles, canvas selection +
+Design inspector, edit/preview modes, dashed drop indicators) was verified
+the same way:
+
+- Units: composer 161 vitest tests (inspector widgets/commit paths, prop-op
+  guards, remove rules, sidebar tabs, shortcuts), catalog 52 (prop-spec
+  derivation against the real zod schemas, veil/selection/mode handling,
+  dashed indicator styling).
+- Live Playwright drive (13 checks): handshake; 18 visual tiles; sidecar v2
+  announce; positional drag under the edit veil; undo; **canvas
+  click-to-select opening the Design inspector** (deepest component wins —
+  clicking the CTA selects its label Text); **text-prop commit re-rendering
+  the canvas as exactly one undo step** (a double-snapshot bug found by this
+  drive was fixed in `store.commitProp` with an unchanged-value guard);
+  inspector Delete removing a subtree and undo restoring it; preview mode
+  restoring live components (SEND_TO_SERVER observed) and edit mode
+  re-engaging; Chat-tab mock apply; theme propagation; **dashed drop
+  indicators drawn during a DND hover** (insertion caret + container
+  outline, captured on a catalog-solo page). Screenshots:
+  `composer-inspector.png`, `composer-dnd-indicator.png`, plus refreshed
+  `composer-{light,chat-applied,dark}.png`.
+- Compatibility guard: the sidecar's default mode is preview, so the catalog
+  stays a fully interactive standard renderer under COMPOSERX-unaware hosts
+  (official hosted composer); our composer switches it to edit in every
+  handshake.

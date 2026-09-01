@@ -169,7 +169,9 @@ the layout JSON directly, or ask the **Anthropic-powered chat** — strictly
 bring-your-own key, entered in the browser and kept in localStorage, so the
 zero-secrets rule above still holds. The cross-cutting contract (message
 shapes, ports, ids, deploy layout) is pinned in
-[docs/composer/CONTRACT.md](docs/composer/CONTRACT.md); the app READMEs
+[docs/composer/CONTRACT.md](docs/composer/CONTRACT.md) — and
+[docs/composer/REPLICATION.md](docs/composer/REPLICATION.md) is the handoff for
+rebuilding the composer against a different React app; the app READMEs
 ([composer](apps/composer/README.md), [catalog](apps/catalog/README.md)) cover
 the pane tour, the reskin mechanics, and BYO-renderer use.
 

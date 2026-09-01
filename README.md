@@ -184,12 +184,18 @@ pnpm --filter @mwe/composer dev           # terminal 2 — composer shell (port 
 builds both apps and publishes them as **one GitHub Pages project site** —
 composer at the root, catalog under `catalog/` (contract §9) — via
 [.github/workflows/deploy-composer.yml](.github/workflows/deploy-composer.yml),
-landing at <https://mbaker40.github.io/apollo-agui-a2ui/> **once the repo
-owner enables Pages**: Settings → Pages → Build and deployment → Source:
-**GitHub Actions** (one-time; no secrets to configure — visitors bring their
-own Anthropic key). The deployed composer also accepts an
-`http://localhost:…` renderer URL in Settings for hybrid dev — browsers treat
-localhost as a trustworthy origin even inside an HTTPS page.
+landing at <https://mbaker40.github.io/apollo-agui-a2ui/>. The workflow
+self-enables Pages on its first run (`configure-pages` with
+`enablement: true`); note GitHub Pages on a **private** repo requires a paid
+plan — make the repo public or use the container path below otherwise. No
+secrets to configure — visitors bring their own Anthropic key. The same site
+also ships as a container:
+[deploy/composer.Dockerfile](deploy/composer.Dockerfile) (multi-stage build →
+Caddy, `PORT`-aware) runs on any container host; the Railway deployment uses
+it with `RAILWAY_DOCKERFILE_PATH=deploy/composer.Dockerfile`. The deployed
+composer also accepts an `http://localhost:…` renderer URL in Settings for
+hybrid dev — browsers treat localhost as a trustworthy origin even inside an
+HTTPS page.
 
 ## Design decisions (and divergences from the handoff doc)
 

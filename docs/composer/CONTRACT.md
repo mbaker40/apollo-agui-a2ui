@@ -100,11 +100,17 @@ Canonical apply sequence, exactly like the official shell's gallery:
 ```
 
 - The data-model field is **`value`** (optionally with `path`), not `contents`.
-- Components are a **flat id-referenced list**: `{id, component, ...props}`
-  with containment via `children: [ids]` (Row/Column/List/Card/Tabs/Modal)
-  or `child: id` (Button). The root component has `id: "root"`.
+- Components are a **flat id-referenced list**: `{id, component, ...props}`.
+  Containment (verified against `@a2ui/web_core@0.10.6` zod schemas — these
+  are strict, and one bad component fails the whole `updateComponents`
+  batch): `children: [ids]` exists ONLY on **Row/Column/List**; **Card** and
+  **Button** take a single REQUIRED `child: id`; **Modal** takes
+  `trigger: id` + `content: id`; **Tabs** takes
+  `tabs: [{title, child: id}]`. The root component has `id: "root"`.
 - Data binding: prop values of the form `{"path": "/some/path"}`.
-- Actions: `"action": {"event": {"name": "...", "context": [...]}}`.
+- Actions: `"action": {"event": {"name": "...", "context": {...}}}` —
+  `context` is a **record** (`z.record`), never an array; the renderer
+  rejects the array form at render time.
 - Constants: surfaceId **`composer-canvas`**; catalogId
   **`https://a2ui.org/specification/v0_9/basic_catalog.json`**.
 - The 18 basic-catalog components: Text, Image, Icon, Video, AudioPlayer,
@@ -152,11 +158,15 @@ Catalog → composer in reply to each hover (and after END, clear highlight):
 } }
 ```
 
-Semantics: hovering a **container** (Row/Column/List/Card/Tabs/Modal) in its
-interior → `slot:'into'`, `containerId` = that component, `index` = end (or
-between-children position if determinable). Hovering a **leaf** → resolve to
-its parent container, `slot:'before'|'after'` by pointer position along the
-parent's main axis, `index` accordingly. The **catalog side owns hit-testing
+Semantics: `'into'` targets are exactly the **children-array containers**
+(Row/Column/List — see §3 containment): hovering one's interior →
+`slot:'into'`, `containerId` = that component, `index` = end (or
+between-children position if determinable). Hovering anything else —
+leaves AND single-slot components (Card/Button/Modal/Tabs) — resolves to
+the nearest ancestor holding a `children` array, `slot:'before'|'after'`
+by pointer position along that ancestor's main axis, `index` accordingly.
+(Single-slot interiors stay editable via JSON/chat; drag-into them is
+deliberately not offered.) The **catalog side owns hit-testing
 and geometry** (it can see the DOM); it also renders the live drop-indicator
 highlight itself using `rect`. The composer decides what to insert and
 performs the splice in its document, then re-sends `RENDER_A2UI`.
@@ -198,8 +208,9 @@ Composer state (single source of truth) is a `SurfaceDoc`:
   `child`, and any string prop that exactly matches a snippet id), append
   the remapped components to `doc.components`, splice the remapped snippet
   root id (`root` before remapping) into the target container's `children`
-  at the target index (or set as Button-style `child` only never — targets
-  are containers). Merge `ComponentUsage.data` into `doc.dataModel`
+  at the target index. Valid insert targets are exactly the
+  children-array containers of §3 (Row/Column/List) — never Card / Button /
+  Modal / Tabs slots. Merge `ComponentUsage.data` into `doc.dataModel`
   (shallow, existing keys win). No orphan components: every non-root
   component is reachable from `root`.
 - Undo/redo: bounded snapshot stack of serialized docs (50 entries) —

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyRenderItems,
+  collectSubtreeIds,
   createStore,
   findRootId,
   mainAxis,
   resolveDropTarget,
+  resolveLiftAnchor,
   type Rect,
   type SurfaceStore,
 } from '../src/sidecar-math';
@@ -221,5 +223,149 @@ describe('resolveDropTarget', () => {
       slot: 'before',
       index: 2,
     });
+  });
+});
+
+describe('resolveLiftAnchor (contract 4e)', () => {
+  // COMPONENTS plus a Button (child slot) and a Tabs (tabs[].child slot).
+  const LIFT_COMPONENTS = [
+    {
+      id: 'root',
+      component: 'Column',
+      children: ['text-1', 'row-1', 'card-1', 'button-1', 'tabs-1'],
+    },
+    { id: 'text-1', component: 'Text', text: 'a' },
+    { id: 'row-1', component: 'Row', children: ['text-2', 'text-3'] },
+    { id: 'text-2', component: 'Text', text: 'b' },
+    { id: 'text-3', component: 'Text', text: 'c' },
+    { id: 'card-1', component: 'Card', child: 'text-4' },
+    { id: 'text-4', component: 'Text', text: 'd' },
+    { id: 'button-1', component: 'Button', child: 'button-label' },
+    { id: 'button-label', component: 'Text', text: 'Go' },
+    { id: 'tabs-1', component: 'Tabs', tabs: [{ title: 't', child: 'tab-child' }] },
+    { id: 'tab-child', component: 'Text', text: 'e' },
+  ];
+  const store = makeStore(LIFT_COMPONENTS);
+
+  it("pressing a Button's inner label lifts the Button", () => {
+    expect(resolveLiftAnchor(store, 'button-label')).toBe('button-1');
+  });
+
+  it("pressing a Card's slot-bound interior lifts the Card", () => {
+    expect(resolveLiftAnchor(store, 'text-4')).toBe('card-1');
+  });
+
+  it("pressing a Tabs pane's child lifts the Tabs", () => {
+    expect(resolveLiftAnchor(store, 'tab-child')).toBe('tabs-1');
+  });
+
+  it('a component sitting directly in a children array lifts itself', () => {
+    expect(resolveLiftAnchor(store, 'text-2')).toBe('text-2');
+    expect(resolveLiftAnchor(store, 'row-1')).toBe('row-1');
+    expect(resolveLiftAnchor(store, 'card-1')).toBe('card-1');
+  });
+
+  it('the root, unknown ids, and null yield no lift anchor (no move starts)', () => {
+    expect(resolveLiftAnchor(store, 'root')).toBeNull();
+    expect(resolveLiftAnchor(store, 'no-such-id')).toBeNull();
+    expect(resolveLiftAnchor(store, null)).toBeNull();
+  });
+
+  it('a slot occupant with no children-array ancestor yields null', () => {
+    // Card as the root: its child has no children-array anywhere above.
+    const slotOnly = makeStore([
+      { id: 'root', component: 'Card', child: 'text-x' },
+      { id: 'text-x', component: 'Text', text: 'x' },
+    ]);
+    expect(resolveLiftAnchor(slotOnly, 'text-x')).toBeNull();
+  });
+
+  it('collectSubtreeIds walks children arrays and slots', () => {
+    expect(collectSubtreeIds(store, 'row-1')).toEqual(new Set(['row-1', 'text-2', 'text-3']));
+    expect(collectSubtreeIds(store, 'card-1')).toEqual(new Set(['card-1', 'text-4']));
+    expect(collectSubtreeIds(store, 'tabs-1')).toEqual(new Set(['tabs-1', 'tab-child']));
+  });
+});
+
+describe('resolveDropTarget with excludeSubtree (contract 4e move)', () => {
+  function resolveExcluding(x: number, y: number, hitId: string | null, excludeSubtree: string) {
+    return resolveDropTarget({
+      x,
+      y,
+      hitId,
+      store: makeStore(),
+      getRect: (id) => RECTS[id] ?? null,
+      viewport: VIEWPORT,
+      excludeSubtree,
+    });
+  }
+
+  it("hovering the moved node's own area targets its parent context", () => {
+    // Pointer inside row-1 (the moved component): as if row-1 were absent,
+    // the hit falls to root; index 1 = row-1's own after-removal slot
+    // (between text-1 mid 30 and card-1 mid 210).
+    const target = resolveExcluding(150, 110, 'row-1', 'row-1');
+    expect(target).toMatchObject({
+      targetId: 'root',
+      containerId: 'root',
+      slot: 'into',
+      index: 1,
+    });
+  });
+
+  it('hits on descendants of the moved subtree also resolve to the parent context', () => {
+    const target = resolveExcluding(90, 100, 'text-2', 'row-1');
+    expect(target).toMatchObject({ containerId: 'root', slot: 'into', index: 1 });
+  });
+
+  it('a container being moved can never be its own target', () => {
+    // Even a direct hit on the moved Row must not produce 'into row-1'.
+    const target = resolveExcluding(150, 110, 'row-1', 'row-1');
+    expect(target.containerId).not.toBe('row-1');
+    // Nor can its interior gaps resolve inside the excluded subtree.
+    expect(collectSubtreeIds(makeStore(), 'row-1').has(target.containerId as string)).toBe(false);
+  });
+
+  it('same-parent index is computed after removal: sibling AFTER the origin', () => {
+    // card-1 sits at original index 2; with row-1 (index 1) removed the
+    // filtered children are [text-1, card-1] and card-1's index is 1.
+    const before = resolveExcluding(15, 175, 'card-1', 'row-1'); // above mid 210
+    expect(before).toMatchObject({ containerId: 'root', slot: 'before', index: 1 });
+
+    const after = resolveExcluding(15, 240, 'card-1', 'row-1'); // below mid 210
+    expect(after).toMatchObject({ containerId: 'root', slot: 'after', index: 2 });
+  });
+
+  it('same-parent index is computed after removal: sibling BEFORE the origin', () => {
+    // text-1 (index 0) precedes the moved row-1: indices are unshifted.
+    const before = resolveExcluding(150, 20, 'text-1', 'row-1'); // above mid 30
+    expect(before).toMatchObject({ containerId: 'root', slot: 'before', index: 0 });
+
+    const after = resolveExcluding(150, 45, 'text-1', 'row-1'); // below mid 30
+    expect(after).toMatchObject({ containerId: 'root', slot: 'after', index: 1 });
+  });
+
+  it('background hover appends at the after-removal end of root', () => {
+    // Without exclusion this is index 3 (below every child); with card-1
+    // excluded the filtered children are [text-1, row-1] -> index 2.
+    const target = resolveExcluding(150, 290, null, 'card-1');
+    expect(target).toMatchObject({ containerId: 'root', slot: 'into', index: 2 });
+  });
+
+  it('resolution elsewhere is untouched by the exclusion', () => {
+    // Hover inside row-1 while moving card-1: same result as the plain path.
+    const target = resolveExcluding(90, 100, 'text-2', 'card-1');
+    expect(target).toMatchObject({
+      targetId: 'text-2',
+      containerId: 'row-1',
+      slot: 'after',
+      index: 1,
+    });
+  });
+
+  it('an unknown excludeSubtree id behaves exactly like no exclusion', () => {
+    const excluded = resolveExcluding(150, 55, 'root', 'no-such-id');
+    const plain = resolve(150, 55, 'root');
+    expect(excluded).toEqual(plain);
   });
 });

@@ -2,11 +2,12 @@
 
 Custom-styled React **basic catalog renderer** for the A2UI composer. Runs in a
 sandboxed iframe and speaks the official A2UI Preview Bridge protocol (via the
-vendored `packages/a2ui-bridge`), plus the additive `COMPOSERX_*` **sidecar v2**
+vendored `packages/a2ui-bridge`), plus the additive `COMPOSERX_*` **sidecar v3**
 defined in [`docs/composer/CONTRACT.md`](../../docs/composer/CONTRACT.md)
-(sections 4, 4b, 4c, 4d): drag-and-drop hit-testing with Figma-like dashed drop
-indicators, edit/preview modes with click-to-select and selection outlines, and
-schema-derived prop specs. Dev port: **7465**.
+(sections 4, 4b, 4c, 4d, 4e): drag-and-drop hit-testing with Figma-like dashed
+drop indicators, edit/preview modes with click-to-select and selection
+outlines, schema-derived prop specs, and press-and-drag canvas move of placed
+components. Dev port: **7465**.
 
 ## Quickstart
 
@@ -67,14 +68,14 @@ var(--a2ui-border))`). `basicCatalog.themeSchema` is **undefined** in 0.10.2,
   sample we configure no markdown renderer, so it renders as plain text (the
   package logs a one-time console warning).
 
-## COMPOSERX sidecar v2
+## COMPOSERX sidecar v3
 
-Message shapes and semantics: contract sections 4/4b/4c/4d. Features
+Message shapes and semantics: contract sections 4/4b/4c/4d/4e. Features
 announced right after the bridge handshake:
 
 ```ts
 { type: 'COMPOSERX_SIDECAR_READY',
-  payload: { features: ['dnd-hittest', 'select', 'prop-specs'], version: 2 } }
+  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move'], version: 3 } }
 ```
 
 immediately followed by `COMPOSERX_PROP_SPECS` (section 4d, below). Both are
@@ -95,7 +96,9 @@ shell does). Split into:
     nearest ancestor with a `children` array; the path child is the anchor;
     `before`/`after` by pointer vs anchor midpoint, caret rect at the
     anchor's edge;
-  - background / empty canvas → `'into'` the root (`targetId: null`).
+  - background / empty canvas → `'into'` the root (`targetId: null`);
+  - also home to the canvas-move pure logic (contract 4e, below):
+    `resolveLiftAnchor` and the `excludeSubtree` view of `resolveDropTarget`.
 - `src/prop-specs.ts` — pure derivation of per-component `PropSpec[]` from
   the REAL zod schemas (see "Prop specs" below).
 - `src/sidecar.ts` — DOM plumbing, started from `main.tsx`: origin-checked
@@ -147,6 +150,52 @@ in light and dark), cleared on `COMPOSERX_DND_END`:
 - `'into'` → a **2px dashed accent outline (6px radius)** around the
   container rect with a very light accent wash inside;
 - no target → nothing.
+
+### Canvas move (contract 4e, feature `'move'`)
+
+Press-and-drag on an already-rendered component in **edit mode** moves it —
+the Figma lift. The whole gesture runs inside the iframe on the edit veil
+(plain pointer events + `setPointerCapture`, no HTML5 DnD); only three
+messages cross the frame:
+
+```ts
+{ type: 'COMPOSERX_MOVE_START',  payload: { id } }                            // catalog → composer
+{ type: 'COMPOSERX_MOVE_DROP',   payload: { id, containerId, index, slot } } // slot: before|after|into
+{ type: 'COMPOSERX_MOVE_CANCEL', payload: { id } }
+```
+
+- **Threshold + click coexistence**: `pointerdown` over a component records a
+  candidate; pointer travel past **~5px** (`MOVE_THRESHOLD_PX`) starts the
+  move and posts `MOVE_START`. A sub-threshold `pointerup` stays a click and
+  posts `COMPOSERX_SELECT` exactly as before; once a move has started, the
+  gesture's trailing click-derived SELECT is suppressed (one-shot flag).
+- **Lift anchor** (`resolveLiftAnchor`, pure + unit-tested): from the deepest
+  `[data-a2ui-id]` hit, climb to the nearest component whose parent reference
+  is a **children-array splice**. Pressing a Button's inner label lifts the
+  Button; pressing a Card's slot-bound interior lifts the Card; the root (or
+  a slot occupant with no children-array ancestor) arms nothing.
+- **Target resolution**: the same `resolveDropTarget` path as DND_HOVER, with
+  the moved component's **entire subtree excluded** (`excludeSubtree`):
+  excluded components vanish from the mirrored view, hits inside the subtree
+  resolve to the moved component's parent context, a container being moved
+  can never be its own target — and every emitted `index` is the position in
+  the target container's children **after the moved id's removal** (the
+  contract-5 `moveComponent` rule; a same-container reorder needs no
+  composer-side adjustment).
+- **Visuals**: a translucent accent-bordered **ghost** (sized to the lifted
+  component's measured rect, labeled with its component type) follows the
+  pointer under the grab offset; the **origin rect** is dimmed with a faint
+  dashed outline; the section-4b dashed indicators track the current resolved
+  target (rAF-throttled). All layers are `position: fixed`,
+  `pointer-events: none`, `overflow: hidden` — invisible to `SURFACE_RESIZE` —
+  and everything clears on drop/cancel.
+- **Endings**: `pointerup` with a resolved target → `MOVE_DROP`; `pointerup`
+  with no target, **Escape** mid-drag (window keydown listener active only
+  while a move is in flight), or `pointercancel` → `MOVE_CANCEL`. Switching
+  to preview mode or a `RENDER_A2UI` landing mid-drag also cancels. The
+  catalog **mutates nothing**: the composer validates (`canMoveTo`) and
+  applies `moveComponent`, then re-sends `RENDER_A2UI`, which re-anchors the
+  selection outline through the existing path.
 
 ### Prop specs (contract 4d)
 

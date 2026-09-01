@@ -1,8 +1,10 @@
 /**
- * Pure logic for the COMPOSERX drag-and-drop sidecar (contract section 4):
- * mirrors the component tree from RENDER_A2UI traffic and resolves a hover
+ * Pure logic for the COMPOSERX drag-and-drop sidecar (contract sections 4 and
+ * 4e): mirrors the component tree from RENDER_A2UI traffic, resolves a hover
  * point + deepest-hit component id into a drop target
- * (`containerId`/`index`/`slot`/`rect`). DOM concerns live in sidecar.ts.
+ * (`containerId`/`index`/`slot`/`rect`) — optionally with a moved component's
+ * subtree excluded — and resolves the canvas-move lift anchor. DOM concerns
+ * live in sidecar.ts.
  */
 
 export interface Rect {
@@ -124,6 +126,44 @@ export function buildParentIndex(store: SurfaceStore): Map<string, string> {
   return parents;
 }
 
+/** `id` plus every component reachable from it through any containment reference. */
+export function collectSubtreeIds(store: SurfaceStore, id: string): Set<string> {
+  const ids = new Set<string>();
+  const queue = [id];
+  while (queue.length > 0) {
+    const next = queue.pop() as string;
+    if (ids.has(next)) continue;
+    ids.add(next);
+    const comp = store.components.get(next);
+    if (comp !== undefined) queue.push(...allChildIds(comp));
+  }
+  return ids;
+}
+
+/**
+ * Contract section 4e: the nearest ancestor-or-self of `hitId` whose parent
+ * reference is a **children-array splice** — the component a press-and-drag
+ * lifts. Pressing a Button's inner label lifts the Button; pressing a Card's
+ * slot-bound interior lifts the Card. Returns null when no such ancestor
+ * exists (the root itself, an orphan, or an unknown id): no move starts.
+ */
+export function resolveLiftAnchor(store: SurfaceStore, hitId: string | null): string | null {
+  if (hitId === null || !store.components.has(hitId)) return null;
+  const parents = buildParentIndex(store);
+  const seen = new Set<string>();
+  let anchorId = hitId;
+  for (;;) {
+    if (seen.has(anchorId)) return null; // malformed cyclic tree
+    seen.add(anchorId);
+    const parentId = parents.get(anchorId);
+    if (parentId === undefined) return null;
+    const parent = store.components.get(parentId);
+    if (parent === undefined) return null;
+    if (childrenOf(parent).includes(anchorId)) return anchorId;
+    anchorId = parentId;
+  }
+}
+
 /** The id the composer treats as the tree root ('root' per contract section 3). */
 export function findRootId(store: SurfaceStore): string | null {
   if (store.components.size === 0) return null;
@@ -182,6 +222,16 @@ export interface ResolveDropTargetArgs {
   getRect: (id: string) => Rect | null;
   /** Viewport rect, used as the indicator fallback for the empty canvas. */
   viewport: Rect;
+  /**
+   * Canvas move (contract section 4e): id of the component being moved. Its
+   * entire subtree is excluded from resolution — a hit inside it resolves as
+   * if those nodes were absent (the pointer targets the moved component's
+   * parent context), and children arrays are viewed without the moved id, so
+   * every emitted `index` is a position in the target container's children
+   * AFTER the moved id's removal (the section-5 move-op rule). A container
+   * being moved can never be its own target.
+   */
+  excludeSubtree?: string;
 }
 
 const NO_TARGET: DropTarget = {
@@ -196,9 +246,45 @@ const NO_TARGET: DropTarget = {
  * Contract section 4 semantics: container interior -> 'into' (index between
  * children along the main axis, or at the end); leaf -> 'before'/'after'
  * within its nearest ancestor holding a `children` array; empty canvas or
- * background -> 'into' the root container.
+ * background -> 'into' the root container. With `excludeSubtree` set
+ * (canvas move, section 4e) the moved subtree is removed from the view
+ * first — see the field's doc for the exact semantics.
  */
 export function resolveDropTarget(args: ResolveDropTargetArgs): DropTarget {
+  const excludeId = args.excludeSubtree;
+  if (excludeId === undefined || !args.store.components.has(excludeId)) {
+    return resolveInView(args);
+  }
+  const excluded = collectSubtreeIds(args.store, excludeId);
+  // A hit inside the moved subtree targets the parent context: with the
+  // subtree absent, the pointer over that area falls onto the container the
+  // moved component currently sits in (a children-array container per the
+  // lift-anchor rule).
+  const hitId =
+    args.hitId !== null && excluded.has(args.hitId)
+      ? (buildParentIndex(args.store).get(excludeId) ?? null)
+      : args.hitId;
+  const components = new Map<string, ComponentInstance>();
+  for (const [id, comp] of args.store.components) {
+    if (excluded.has(id)) continue;
+    components.set(
+      id,
+      Array.isArray(comp.children)
+        ? {
+            ...comp,
+            children: comp.children.filter((c) => typeof c !== 'string' || !excluded.has(c)),
+          }
+        : comp,
+    );
+  }
+  return resolveInView({
+    ...args,
+    hitId,
+    store: { surfaceId: args.store.surfaceId, components },
+  });
+}
+
+function resolveInView(args: ResolveDropTargetArgs): DropTarget {
   const { x, y, hitId, store, getRect, viewport } = args;
   const rootId = findRootId(store);
   if (rootId === null) return NO_TARGET;

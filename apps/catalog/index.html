@@ -1,0 +1,88 @@
+<!doctype html>
+<!--
+ Copyright 2026 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+
+ Adapted from a2ui-project/composer samples/react-basic-catalog/index.html
+ (commit 40463c8); restyled with the ComposerX violet brand palette.
+-->
+
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ComposerX Catalog</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Icon font for the a2ui Icon component (graceful text fallback if blocked). -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block"
+    />
+    <style>
+      /* The seven --a2ui-color-* tokens are the documented restyling channel
+         (contract section 6); brand values for light, dark via the hooks the
+         bridge sets (`.dark-theme` class + `data-theme` attribute). The rest
+         of the reskin lives in src/brand.css. */
+      :root {
+        color-scheme: light dark;
+        --a2ui-color-surface: #ffffff;
+        --a2ui-color-on-surface: #292136;
+        --a2ui-color-background: #faf9f7;
+        --a2ui-color-on-background: #292136;
+        --a2ui-color-input: #ffffff;
+        --a2ui-color-on-input: #292136;
+        --a2ui-color-border: #e2dcd2;
+      }
+
+      html.dark-theme,
+      [data-theme='dark'],
+      .dark-theme body {
+        --a2ui-color-surface: #211b2e;
+        --a2ui-color-on-surface: #ece7f6;
+        --a2ui-color-background: #17131f;
+        --a2ui-color-on-background: #ece7f6;
+        --a2ui-color-input: #2a2338;
+        --a2ui-color-on-input: #f0ecf8;
+        --a2ui-color-border: #3c3350;
+      }
+
+      /* Default to the OS preference when no explicit theme was requested. */
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          --a2ui-color-surface: #211b2e;
+          --a2ui-color-on-surface: #ece7f6;
+          --a2ui-color-background: #17131f;
+          --a2ui-color-on-background: #ece7f6;
+          --a2ui-color-input: #2a2338;
+          --a2ui-color-on-input: #f0ecf8;
+          --a2ui-color-border: #3c3350;
+        }
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: var(--brand-font, 'Avenir Next', 'Segoe UI', system-ui, sans-serif);
+        background-color: var(--a2ui-color-background, canvas);
+        color: var(--a2ui-color-on-background, canvastext);
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app-root"></div>
+    <script type="module" src="./src/main.tsx"></script>
+  </body>
+</html>

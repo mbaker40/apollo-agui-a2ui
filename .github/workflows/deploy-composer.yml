@@ -1,0 +1,77 @@
+# Deploys the custom A2UI composer as ONE GitHub Pages project site:
+# apps/composer at the site root, apps/catalog under catalog/ — the layout
+# pinned in docs/composer/CONTRACT.md §9 (the composer's production default
+# renderer URL is `new URL('catalog/', document.baseURI)`).
+#
+# configure-pages runs with `enablement: true`, so the first run on main
+# enables Pages automatically (no Settings step). If enablement is rejected
+# (e.g. a private repo on a plan without Pages), either make the repo public
+# or enable it manually: Settings → Pages → Source: "GitHub Actions".
+# No secrets — visitors bring their own Anthropic key in-browser.
+name: Deploy composer to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/composer/**'
+      - 'apps/catalog/**'
+      - 'packages/a2ui-bridge/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy-composer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deployment at a time. cancel-in-progress stays false so an
+# in-flight production deployment always completes (never torn down halfway);
+# queued runs coalesce and the newest still ships right after.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No `version` input on purpose: pnpm/action-setup reads the pinned
+      # version from package.json's `packageManager` field.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build composer (site root)
+        run: COMPOSER_BASE=/apollo-agui-a2ui/ pnpm --filter @mwe/composer build
+      - name: Build catalog (site catalog/)
+        run: COMPOSER_BASE=/apollo-agui-a2ui/catalog/ pnpm --filter @mwe/composer-catalog build
+      - name: Assemble the Pages tree
+        run: |
+          mkdir -p site/catalog
+          cp -R apps/composer/dist/. site/
+          cp -R apps/catalog/dist/. site/catalog/
+          touch site/.nojekyll
+          # The renderer's relative GET_CATALOG fetch resolves to exactly this
+          # file (contract §2/§9) — fail the build if it went missing.
+          test -f site/catalog/catalog
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

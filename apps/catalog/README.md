@@ -1,0 +1,349 @@
+# @mwe/composer-catalog
+
+Custom-styled React **basic catalog renderer** for the A2UI composer. Runs in a
+sandboxed iframe and speaks the official A2UI Preview Bridge protocol (via the
+vendored `packages/a2ui-bridge`), plus the additive `COMPOSERX_*` **sidecar v5**
+defined in [`docs/composer/CONTRACT.md`](../../docs/composer/CONTRACT.md)
+(sections 4, 4b, 4c, 4d, 4e, 4f): drag-and-drop hit-testing with Figma-like
+dashed drop indicators, edit/preview modes with click-to-select and selection
+outlines, schema-derived prop specs, press-and-drag canvas move of placed
+components, marquee + multi-select (rubber-band selection, shift-click /
+long-press additive selects, multi-outlines), and group move (dragging a
+member of the multi-selection lifts the whole selection). Dev port: **7465**.
+
+## Quickstart
+
+```sh
+pnpm --filter @mwe/composer-catalog dev        # http://localhost:7465/
+pnpm --filter @mwe/composer-catalog test       # vitest (jsdom)
+pnpm --filter @mwe/composer-catalog typecheck
+pnpm --filter @mwe/composer-catalog build      # COMPOSER_BASE=/apollo-agui-a2ui/catalog/ for Pages
+```
+
+## Using it from a composer
+
+- **Our composer (`apps/composer`)**: automatic — its default renderer URL is
+  `http://localhost:7465/` in dev and `catalog/` relative to the deployed site
+  in production (contract section 9). No configuration needed.
+- **The official hosted composer**: run the dev server, then paste
+  `http://localhost:7465/` as the renderer URL. This works from an HTTPS host
+  because browsers treat `http://localhost` as a trustworthy origin. The
+  composer appends `?origin=<its origin>&theme=<light|dark>`; the bridge only
+  accepts host messages from that origin (or our own) and posts replies to it.
+  Everything `COMPOSERX_*` is additive — a host that ignores it sees a fully
+  standard bridge renderer (`RENDERER_READY`, `A2UI_CATALOG` served from
+  `public/catalog`, `COMPONENT_USAGES` from `src/usages.ts`, `RENDER_A2UI`,
+  `DATA_MODEL_CHANGE`, `SEND_TO_SERVER`, `SURFACE_RESIZE`, ...).
+
+## Reskin architecture (what actually styles `@a2ui/react@0.10.2`)
+
+Verified against the installed package:
+
+- The package injects **only zero-specificity token defaults**
+  (`:where(:root) { --a2ui-*: ... }` through `document.adoptedStyleSheets`);
+  component visuals are mostly **inline styles that read `--a2ui-*` custom
+  properties with fallbacks** (e.g. Card: `border: var(--a2ui-card-border,
+var(--a2ui-border))`). `basicCatalog.themeSchema` is **undefined** in 0.10.2,
+  so there is no theme-object API — tokens + CSS is the mechanism.
+- Therefore the reskin is **token-first**:
+  - `index.html` defines the seven documented `--a2ui-color-*` tokens for
+    light and dark (keyed off the `.dark-theme` class / `data-theme`
+    attribute the bridge sets, plus a `prefers-color-scheme` fallback when no
+    explicit theme was requested).
+  - `src/brand.css` redefines the extended `--a2ui-*` tokens (primary,
+    radius, card border/shadow, tabs, slider, modal, datetimeinput, ...) to
+    the violet brand (`#6d28d9` light / `#a78bfa` dark, 10px radius,
+    `'Avenir Next'` stack, warm off-white `#faf9f7` / deep `#17131f`).
+  - CSS rules cover what tokens cannot reach: Button, TextField internals and
+    ChoicePicker rows carry **no usable classes upstream** (the CSS-module
+    class objects compile to `{}`, so buttons literally render
+    `class="undefined"`), so those are targeted through our
+    `[data-a2ui-component='X']` wrapper attribute (see below) and the stable
+    classes that do exist (`a2ui-card`, `a2ui-tab-button`, `a2ui-modal-*`,
+    `a2ui-date-time-input`, `.chip`, `material-symbols-outlined`).
+    `!important` is used exactly once (modal close-button hover, which must
+    beat an inline `background: none`).
+- Icons: `index.html` loads Material Symbols from Google Fonts; when the font
+  is unavailable (e.g. blocked egress) the icon degrades to its ligature name
+  as text.
+- Plain body text goes through the markdown pipeline; like the official
+  sample we configure no markdown renderer, so it renders as plain text (the
+  package logs a one-time console warning).
+
+## COMPOSERX sidecar v5
+
+Message shapes and semantics: contract sections 4/4b/4c/4d/4e/4f. Features
+announced right after the bridge handshake:
+
+```ts
+{ type: 'COMPOSERX_SIDECAR_READY',
+  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move', 'multi-select', 'group-move'], version: 5 } }
+```
+
+immediately followed by `COMPOSERX_PROP_SPECS` (section 4d, below). Both are
+posted from an `App` effect that runs directly after `useA2uiSandbox`'s
+effect, so they always follow `RENDERER_READY`. Under React StrictMode (dev)
+everything is emitted twice — hosts must tolerate duplicates (the official
+shell does). Split into:
+
+- `src/sidecar-math.ts` — pure logic, unit-tested: mirrors the component tree
+  from `RENDER_A2UI` traffic (createSurface resets, updateComponents upserts,
+  deleteSurface clears) and resolves `{x, y, hitId}` into
+  `{targetId, containerId, index, slot, rect}`:
+  - children-array container hit (Row/Column/List) → `slot: 'into'`, index
+    between children along the container's main axis (Row / horizontal List →
+    x, otherwise y), caret rect in the gap (or inset interior rect when the
+    container has no children);
+  - leaf hit (including single-slot Card/Button/Modal/Tabs) → walk up to the
+    nearest ancestor with a `children` array; the path child is the anchor;
+    `before`/`after` by pointer vs anchor midpoint, caret rect at the
+    anchor's edge;
+  - background / empty canvas → `'into'` the root (`targetId: null`);
+  - also home to the canvas-move pure logic (contract 4e, below):
+    `resolveLiftAnchor` and the `excludeSubtree` view of `resolveDropTarget` —
+    and to the marquee candidate rule (contract 4f, below):
+    `marqueeCandidates` + `rectsIntersect`.
+- `src/prop-specs.ts` — pure derivation of per-component `PropSpec[]` from
+  the REAL zod schemas (see "Prop specs" below).
+- `src/sidecar.ts` — DOM plumbing, started from `main.tsx`: origin-checked
+  message listener (`DomainOriginVerificationService`, same rules as the
+  bridge), hit-testing, `COMPOSERX_DND_TARGET` replies posted to the same
+  target origin the bridge uses (`?origin=` param, else our own origin), the
+  edit veil, and the indicator/outline overlay layers (all `position: fixed`
+  with `overflow: hidden` and `pointer-events: none`, so they can never feed
+  back into `SURFACE_RESIZE` measurements).
+
+### Edit/preview modes + selection (contract 4c)
+
+- `COMPOSERX_SET_MODE {mode: 'edit' | 'preview'}` — **default is `preview`** (a
+  COMPOSERX-unaware host like the official hosted composer gets a fully
+  interactive standard renderer)
+  before any message arrives. Mode switches are idempotent.
+- **Edit mode** installs a transparent full-viewport **edit veil**
+  (`pointer-events: auto`, stacked above the surface and below the indicator
+  layers) that swallows every pointer interaction: Buttons cannot fire their
+  actions, TextFields cannot be focused or typed into (a capture-phase
+  `focusin` guard also blurs anything that acquires focus by keyboard).
+  Clicks hit-test through the veil with `document.elementsFromPoint`,
+  skipping the sidecar's own layers, and post
+  `COMPOSERX_SELECT {id: <deepest data-a2ui-id> | null}` (null = background
+  click). Moving the pointer draws a local, rAF-throttled 1px accent hover
+  outline (no messages).
+- `COMPOSERX_SET_SELECTION {id | null, ids?}` (the composer is the source of
+  truth) renders a **solid 2px accent outline, offset 1px** around the
+  primary (`id`) component's rect — and, since v4, a lighter **1.5px /
+  70%-accent** outline around every other id in `ids` (contract 4f, below).
+  All outlines re-anchor after every `RENDER_A2UI` (re-measured on
+  chained timeouts + animation frames, because the bridge defers
+  `createSurface` remounts by a macrotask), on window resize/scroll, and via
+  a `ResizeObserver` on each outlined component's first box. Ids that no
+  longer render are dropped individually.
+- **Preview mode** removes the veil and all hover/selection outlines;
+  components behave fully live (actions → `SEND_TO_SERVER`). The selection
+  id is retained sidecar-side and redrawn on the next switch to edit.
+- Note: the mode default means a host that never speaks COMPOSERX (e.g. the
+  official hosted composer) gets an inert canvas — that is the contract's
+  deliberate default; our composer re-sends the mode on every handshake.
+
+### Dashed drop indicators (contract 4b)
+
+Drawn by the catalog during a drag, all in brand-accent tokens (theme-aware
+in light and dark), cleared on `COMPOSERX_DND_END`:
+
+- `'before'`/`'after'` → a **2px dashed accent insertion line** with small
+  dot end-caps at the caret rect, plus a **faint 1px dashed outline** around
+  the container being spliced into;
+- `'into'` → a **2px dashed accent outline (6px radius)** around the
+  container rect with a very light accent wash inside;
+- no target → nothing.
+
+### Canvas move (contract 4e, feature `'move'`)
+
+Press-and-drag on an already-rendered component in **edit mode** moves it —
+the Figma lift. The whole gesture runs inside the iframe on the edit veil
+(plain pointer events + `setPointerCapture`, no HTML5 DnD); only three
+messages cross the frame:
+
+```ts
+{ type: 'COMPOSERX_MOVE_START',  payload: { id, ids? } }                            // catalog → composer
+{ type: 'COMPOSERX_MOVE_DROP',   payload: { id, containerId, index, slot, ids? } } // slot: before|after|into
+{ type: 'COMPOSERX_MOVE_CANCEL', payload: { id } }
+```
+
+- **Threshold + click coexistence**: `pointerdown` over a component records a
+  candidate; pointer travel past **~5px** (`MOVE_THRESHOLD_PX`) starts the
+  move and posts `MOVE_START`. A sub-threshold `pointerup` stays a click and
+  posts `COMPOSERX_SELECT` exactly as before; once a move has started, the
+  gesture's trailing click-derived SELECT is suppressed (one-shot flag).
+- **Lift anchor** (`resolveLiftAnchor`, pure + unit-tested): from the deepest
+  `[data-a2ui-id]` hit, climb to the nearest component whose parent reference
+  is a **children-array splice**. Pressing a Button's inner label lifts the
+  Button; pressing a Card's slot-bound interior lifts the Card; the root (or
+  a slot occupant with no children-array ancestor) arms nothing.
+- **Target resolution**: the same `resolveDropTarget` path as DND_HOVER, with
+  the moved component's **entire subtree excluded** (`excludeSubtree`):
+  excluded components vanish from the mirrored view, hits inside the subtree
+  resolve to the moved component's parent context, a container being moved
+  can never be its own target — and every emitted `index` is the position in
+  the target container's children **after the moved id's removal** (the
+  contract-5 `moveComponent` rule; a same-container reorder needs no
+  composer-side adjustment).
+- **Visuals**: a translucent accent-bordered **ghost** (sized to the lifted
+  component's measured rect, labeled with its component type) follows the
+  pointer under the grab offset; the **origin rect** is dimmed with a faint
+  dashed outline; the section-4b dashed indicators track the current resolved
+  target (rAF-throttled). All layers are `position: fixed`,
+  `pointer-events: none`, `overflow: hidden` — invisible to `SURFACE_RESIZE` —
+  and everything clears on drop/cancel.
+- **Endings**: `pointerup` with a resolved target → `MOVE_DROP`; `pointerup`
+  with no target, **Escape** mid-drag (window keydown listener active only
+  while a move is in flight), or `pointercancel` → `MOVE_CANCEL`. Switching
+  to preview mode or a `RENDER_A2UI` landing mid-drag also cancels. The
+  catalog **mutates nothing**: the composer validates (`canMoveTo`) and
+  applies `moveComponent`, then re-sends `RENDER_A2UI`, which re-anchors the
+  selection outline through the existing path.
+- **Group move** (contract 4e "Group move", feature `'group-move'`, v5): when
+  the lift anchor is a **member of the last received `SET_SELECTION` ids**
+  and that list has ≥ 2 entries, the whole selection lifts — `MOVE_START` and
+  `MOVE_DROP` carry `ids` (the stored list, snapshotted at lift time; the
+  pressed anchor stays `id`). Every moved origin rect is dimmed, EVERY moved
+  subtree is excluded from target resolution (union — so `index` is the
+  position after ALL moved ids are removed), and the ghost is labeled with
+  the count ("2 components"). A non-member (or singleton selection) lift is a
+  byte-identical single move with no `ids` key; long-press timing and
+  `MOVE_CANCEL` are unchanged.
+
+### Marquee + multi-select (contract 4f, feature `'multi-select'`)
+
+The selection becomes a list (the composer stays authoritative). One veil
+pointerdown can now end several ways, arbitrated by the 5px threshold and a
+350ms long-press timer (`LONG_PRESS_MS`):
+
+| Press on   | Gesture                         | Outcome                                                         |
+| ---------- | ------------------------------- | --------------------------------------------------------------- |
+| component  | quick sub-threshold release     | `COMPOSERX_SELECT {id}` (plain, unchanged v3 payload)           |
+| component  | quick sub-threshold + **shift** | `COMPOSERX_SELECT {id, additive: true}`                         |
+| component  | held ≥ 350ms, sub-threshold     | `COMPOSERX_SELECT {id, additive: true}` immediately + pulse     |
+| component  | moved past ~5px                 | the section-4e move lift (`MOVE_START` → `DROP`/`CANCEL`)       |
+| background | quick sub-threshold release     | `COMPOSERX_SELECT {id: null}` (deselect, unchanged)             |
+| background | moved past ~5px                 | marquee → `COMPOSERX_MARQUEE {ids}` on pointerup (`[]` allowed) |
+
+- **Long-press vs lift arbitration**: the timer is armed at pointerdown for
+  every component press (liftable or not) and cancelled the instant the
+  pointer crosses the threshold — so the additive toggle is checked BEFORE
+  the 4e lift and a long-press can never turn into a lift. Once the timer
+  fires, the additive SELECT posts immediately, the gesture is consumed
+  (pointer capture is kept, but all subsequent movement is ignored and the
+  trailing click is suppressed one-shot), and a brief accent **pulse**
+  (`data-composerx-pulse`, ~380ms) on the pressed component gives
+  haptic-style feedback. The SELECT carries the **deepest** hit id from
+  pointerdown, exactly like the click path.
+- **Shift**: additive applies only to component clicks; a shift-click on the
+  background stays the plain `{id: null}` deselect (background has no
+  additive meaning). Plain clicks omit the `additive` key entirely, so v3
+  hosts see byte-identical payloads.
+- **Marquee**: a background (deepest hit null) press that crosses the
+  threshold starts the rubber band — **solid** 1px accent border with an
+  ~8% accent wash (`data-composerx-marquee="band"`; dashed stays reserved
+  for drop indicators) in its own `pointer-events: none` fixed layer
+  (`composerx-marquee-layer`, stacked above the selection layer). Each
+  animation frame the candidates are recomputed and live-highlighted with
+  light 1.5px solid outlines (`data-composerx-marquee="candidate"`; rects
+  measured once per frame per id). Pointerup re-resolves at the final rect
+  and posts `COMPOSERX_MARQUEE {ids}` (empty array when nothing
+  intersects); the trailing click is suppressed so no stray deselect
+  follows. **Escape or `pointercancel` aborts silently** — visuals clear,
+  NO message. Switching to preview or a `RENDER_A2UI` landing mid-marquee
+  also aborts silently (mid-move they still post `MOVE_CANCEL`, as in v3).
+- **Candidate rule** (`marqueeCandidates`, pure + unit-tested): components
+  whose rect intersects the marquee rect (any positive overlap; touching
+  edges don't count; degenerate zero-width/height line drags still cross),
+  MINUS any whose ancestor — via the full reference edges (`children`,
+  `child`, Modal `trigger`/`content`, Tabs `tabs[].child`) — is itself
+  intersecting: sweeping across a Card yields the Card, never the Card plus
+  its subtree. The root is never a candidate (and never subsumes). Order is
+  flat document order. Rects come from the same wrapper-descendant union
+  measurement as everything else (the `display: contents` wrappers have no
+  box of their own); unmeasurable components are skipped.
+- **Multi-outlines**: `COMPOSERX_SET_SELECTION {id, ids?}` — `ids` is the
+  full list, primary included. The primary keeps the 4c treatment (2px
+  solid accent, 1px offset); every other id gets 1.5px solid at 70% accent,
+  same offset. The single-outline machinery was generalized rather than
+  duplicated: outline boxes are keyed by component id
+  (`data-composerx-outline-id`), reused across refreshes, re-anchored
+  through the same RENDER_A2UI / resize / scroll / ResizeObserver paths,
+  and dropped individually when an id stops rendering. A payload without
+  `ids` behaves exactly like v3.
+
+### Prop specs (contract 4d)
+
+`src/prop-specs.ts` walks each catalog component's zod schema (the branded
+wrapper preserves `name`+`schema` from `@a2ui/web_core`'s ComponentApi
+objects) and posts, once after `SIDECAR_READY`:
+
+```ts
+{ type: 'COMPOSERX_PROP_SPECS', payload: { components: { [name]: { props: PropSpec[] } } } }
+```
+
+Derivation (verified against the actually-installed zod@3.25.76 classic v3
+API — `_def.typeName` internals — with a best-effort zod-v4 fallback):
+unwrap Optional/Default/Nullable (`required` = never optional/defaulted);
+ZodString/Number/Boolean → that kind; ZodEnum → `'enum'` + options; a union
+of one scalar kind with a `{path}` object (DynamicString/Number/Boolean,
+nested unions flattened) → the scalar kind + `bindable: true`; everything
+else (records, `action` unions, arrays like `checks`/`options`/`tabs`,
+accessibility objects, DynamicStringList) → `'json'` (still `bindable` when
+a `{path}` member exists). `children`/`child`/`trigger`/`content`/`tabs`
+are marked `containment: true`. The derivation never throws: weird props
+fall back to `'json'`, components without a usable object schema are
+skipped. Fun fact: Icon's `name` derives as a 59-option enum that is also
+`bindable`, because its schema unions the icon-name enum with `{path}`.
+
+### DOM → component-id mapping (the investigated part)
+
+`@a2ui/react@0.10.2` stamps **no id or data attribute** into the DOM. But
+every catalog implementation's `render` receives its `ComponentContext`
+(`context.componentModel.id` / `.type`), and `basicCatalog` is a plain
+`Catalog` instance whose components can be re-wrapped. `src/branded-catalog.tsx`
+builds `brandedBasicCatalog`: every component render is wrapped in
+
+```html
+<span style="display: contents" data-a2ui-id="<id>" data-a2ui-component="<type>"></span>
+```
+
+`display: contents` generates no box, so Row/Column/List flex layout is
+untouched (verified in-browser). Hit-testing walks
+`document.elementsFromPoint(x, y)` (topmost first), skips the sidecar's own
+veil/overlay layers, and takes the first element's
+`closest('[data-a2ui-id]')` — i.e. the deepest component; rects come from
+the union of the wrapper's descendant boxes (the wrapper itself has none).
+The wrapped catalog is protocol-identical to the stock one: the message
+processor looks catalogs up by `id`, which the bridge re-stamps from
+`createSurface.catalogId` before processing. If this app ever runs without
+the wrapper (e.g. someone swaps in the stock `basicCatalog`), hover
+resolution degrades to the empty-canvas → root path and the composer's
+structural-drop fallback still works.
+
+## Upstream drift fixed in `src/usages.ts`
+
+The sample's snippets predate the strict zod schemas in
+`@a2ui/web_core@0.10.6`; shipped verbatim they would fail validation inside
+the renderer the moment the composer inserts them. Local fixes (each guarded
+by `test/usages.test.ts`, which parses every snippet against the real
+schemas): Button `context` record form + `variant: 'primary'`;
+`usageHint` → `variant`; ChoicePicker `value` list; Icon `check`; Slider
+`min`/`max`; TextField `variant`; plus an added Tabs entry (upstream ships
+none; the contract requires one per catalog component). **Note for the
+composer/chat side:** contract section 3 still shows the
+`context: [...]` array form — the installed schema requires the record form.
+
+## Provenance
+
+Portions of this app are replicated or adapted from the Apache-2.0 licensed
+official composer repository (`github.com/a2ui-project/composer`, commit
+`40463c8`), sample `samples/react-basic-catalog`: `index.html`,
+`src/main.tsx`, `src/App.tsx`, `src/usages.ts`, `test/test-setup.ts`,
+`test/app.test.tsx` (from `src/main.spec.tsx`), and `public/catalog`
+(verbatim). Those files keep their upstream copyright headers plus a
+provenance note describing local changes. The bridge itself is vendored at
+`packages/a2ui-bridge` (see its README and NOTICE).

@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client", "node"],
+    // The vendored a2ui-bridge sources (compiled as part of this program) use
+    // plain named imports for types, which verbatimModuleSyntax rejects.
+    "verbatimModuleSyntax": false,
+    // The vendored bridge has no @types/react of its own (react is a peer);
+    // point type resolution at ours. Typecheck-only: vite/vitest ignore paths.
+    "baseUrl": ".",
+    "paths": {
+      "react": ["./node_modules/@types/react"]
+    }
+  },
+  "include": ["src", "test"]
+}

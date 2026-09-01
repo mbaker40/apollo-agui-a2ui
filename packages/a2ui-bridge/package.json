@@ -1,0 +1,41 @@
+{
+  "name": "a2ui-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vendored renderer-side A2UI Preview Bridge (see README for provenance)",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./messages": {
+      "types": "./src/bridge-message.ts",
+      "default": "./src/bridge-message.ts"
+    },
+    "./render-config": {
+      "types": "./src/render-config.ts",
+      "default": "./src/render-config.ts"
+    },
+    "./react": {
+      "types": "./src/react/index.ts",
+      "default": "./src/react/index.ts"
+    }
+  },
+  "peerDependencies": {
+    "@a2ui/web_core": "^0.10.5",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "peerDependenciesMeta": {
+    "@a2ui/web_core": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  }
+}

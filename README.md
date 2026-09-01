@@ -65,18 +65,21 @@ fixtures, identity-header names, and recorded real-agent SSE transcripts.
 
 ## Repository layout
 
-| Path                         | What                                                                                     | Tested by            |
-| ---------------------------- | ---------------------------------------------------------------------------------------- | -------------------- |
-| `contracts/`                 | Cross-platform source of truth (schemas, fixtures, transcripts)                          | vitest conformance   |
-| `services/executor/`         | True-backend stand-in: task store, REST API, compliance middleware, audit log            | vitest (23)          |
-| `services/graphql/`          | Apollo Server 5 facade over the executor REST API (owns no data)                         | vitest (19)          |
-| `services/agent/`            | AG-UI SSE endpoint, scripted model, backend tools, `entity_changed`                      | pytest (40)          |
-| `apps/web/`                  | React + Apollo Client 4.2 + raw `@ag-ui/client` chat, RefetchEventManager reconciliation | vitest (11)          |
-| `apps/android/`              | Thin Compose + Apollo Kotlin shell over the Kotlin core                                  | build locally        |
-| `apps/ios/`                  | Thin SwiftUI + Apollo iOS shell over the Swift core (XcodeGen)                           | build locally        |
-| `packages/chat-core-kotlin/` | Pure-JVM AG-UI core: SSE parser, session/tool loop, invalidation bus                     | JUnit (20)           |
-| `packages/chat-core-swift/`  | SwiftPM mirror of the Kotlin core, Linux-testable                                        | `swift test` locally |
-| `e2e/`                       | Scripted conversations against the live 3-service stack                                  | vitest (19)          |
+| Path                         | What                                                                                     | Tested by                 |
+| ---------------------------- | ---------------------------------------------------------------------------------------- | ------------------------- |
+| `contracts/`                 | Cross-platform source of truth (schemas, fixtures, transcripts)                          | vitest conformance        |
+| `services/executor/`         | True-backend stand-in: task store, REST API, compliance middleware, audit log            | vitest (23)               |
+| `services/graphql/`          | Apollo Server 5 facade over the executor REST API (owns no data)                         | vitest (19)               |
+| `services/agent/`            | AG-UI SSE endpoint, scripted model, backend tools, `entity_changed`                      | pytest (40)               |
+| `apps/web/`                  | React + Apollo Client 4.2 + raw `@ag-ui/client` chat, RefetchEventManager reconciliation | vitest (11)               |
+| `apps/android/`              | Thin Compose + Apollo Kotlin shell over the Kotlin core                                  | build locally             |
+| `apps/ios/`                  | Thin SwiftUI + Apollo iOS shell over the Swift core (XcodeGen)                           | build locally             |
+| `apps/composer/`             | Custom A2UI composer shell: glossary DnD, iframe canvas, JSON drawer, Anthropic chat     | vitest (363)              |
+| `apps/catalog/`              | Custom-styled A2UI basic-catalog renderer the composer iframes (+ DnD sidecar)           | vitest (121)              |
+| `packages/a2ui-bridge/`      | Vendored renderer-side A2UI Preview Bridge (official composer repo, Apache-2.0)          | vendored — see its README |
+| `packages/chat-core-kotlin/` | Pure-JVM AG-UI core: SSE parser, session/tool loop, invalidation bus                     | JUnit (20)                |
+| `packages/chat-core-swift/`  | SwiftPM mirror of the Kotlin core, Linux-testable                                        | `swift test` locally      |
+| `e2e/`                       | Scripted conversations against the live 3-service stack                                  | vitest (19)               |
 
 ## Prerequisites
 
@@ -131,14 +134,15 @@ audit attribution, read-then-write, and the hybrid frontend-tool round trip
 
 ### Verification matrix (honest)
 
-| Layer                      | Proven in-session by                                                                                                                          | Deferred to user machine                                                      |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| executor / graphql / agent | unit + e2e suites; checked-in real SSE transcripts (`contracts/fixtures/transcripts/`, re-record via `make transcripts`)                      | —                                                                             |
-| web                        | component tests (exact refetch counts, tool loop over recorded transcripts) + Playwright-driven live-stack screenshots in `docs/screenshots/` | —                                                                             |
-| chat-core-kotlin           | `./gradlew test` (17 tests incl. MockWebServer transport)                                                                                     | Android app shell build/run                                                   |
-| chat-core-swift            | — (egress policy blocked every Swift toolchain source in the authoring session; **code is not compile-verified**)                             | `swift test` (Linux or macOS), then iOS shell                                 |
-| docker-compose             | `docker compose config` validation                                                                                                            | `docker compose up --build` (registry blob downloads were blocked in-session) |
-| android / ios shells       | code review only                                                                                                                              | build + run per app README                                                    |
+| Layer                      | Proven in-session by                                                                                                                                                                                         | Deferred to user machine                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| executor / graphql / agent | unit + e2e suites; checked-in real SSE transcripts (`contracts/fixtures/transcripts/`, re-record via `make transcripts`)                                                                                     | —                                                                                       |
+| web                        | component tests (exact refetch counts, tool loop over recorded transcripts) + Playwright-driven live-stack screenshots in `docs/screenshots/`                                                                | —                                                                                       |
+| chat-core-kotlin           | `./gradlew test` (17 tests incl. MockWebServer transport)                                                                                                                                                    | Android app shell build/run                                                             |
+| chat-core-swift            | — (egress policy blocked every Swift toolchain source in the authoring session; **code is not compile-verified**)                                                                                            | `swift test` (Linux or macOS), then iOS shell                                           |
+| docker-compose             | `docker compose config` validation                                                                                                                                                                           | `docker compose up --build` (registry blob downloads were blocked in-session)           |
+| android / ios shells       | code review only                                                                                                                                                                                             | build + run per app README                                                              |
+| composer + catalog         | 86 + 23 vitest tests; live cross-frame Playwright drive (handshake, positional drag-drop via the sidecar, undo, mock-LLM apply, theme, SEND_TO_SERVER) with screenshots in `docs/screenshots/composer-*.png` | real-key Anthropic chat (bring your own key); Pages deploy (enable Pages, push to main) |
 
 Full transcripts and the exact blocked-network details:
 [docs/VERIFICATION.md](docs/VERIFICATION.md).
@@ -151,6 +155,47 @@ and conflict edges, a schema field addition, and DELETED reconciliation).
 The measured result — which layers grow linearly, which stay flat (the mobile
 cores and the event protocol changed by **zero lines**), and the real
 friction hit along the way — is written up in **[docs/SCALING.md](docs/SCALING.md)**.
+
+## A2UI Composer (custom)
+
+A second, self-contained initiative lives alongside the MWE: a greenfield
+**A2UI composer** — a React shell ([apps/composer](apps/composer/)) hosting a
+**custom-styled A2UI basic-catalog renderer** ([apps/catalog](apps/catalog/))
+in a sandboxed iframe, the two speaking the **official A2UI Preview Bridge
+protocol** (vendored at [packages/a2ui-bridge](packages/a2ui-bridge/)). You
+compose A2UI v0.9 layouts three ways: drag glossary entries onto the live
+canvas (precision drops via an additive `COMPOSERX_*` hit-test sidecar), edit
+the layout JSON directly, or ask the **Anthropic-powered chat** — strictly
+bring-your-own key, entered in the browser and kept in localStorage, so the
+zero-secrets rule above still holds. The cross-cutting contract (message
+shapes, ports, ids, deploy layout) is pinned in
+[docs/composer/CONTRACT.md](docs/composer/CONTRACT.md); the app READMEs
+([composer](apps/composer/README.md), [catalog](apps/catalog/README.md)) cover
+the pane tour, the reskin mechanics, and BYO-renderer use.
+
+```bash
+make composer-dev                         # both dev servers, Ctrl-C stops both — or:
+pnpm --filter @mwe/composer-catalog dev   # terminal 1 — renderer (port 7465)
+pnpm --filter @mwe/composer dev           # terminal 2 — composer shell (port 7464)
+# open http://localhost:7464
+```
+
+**Deploy:** every push to `main` touching the composer, catalog, or bridge
+builds both apps and publishes them as **one GitHub Pages project site** —
+composer at the root, catalog under `catalog/` (contract §9) — via
+[.github/workflows/deploy-composer.yml](.github/workflows/deploy-composer.yml),
+landing at <https://mbaker40.github.io/apollo-agui-a2ui/>. The workflow
+self-enables Pages on its first run (`configure-pages` with
+`enablement: true`); note GitHub Pages on a **private** repo requires a paid
+plan — make the repo public or use the container path below otherwise. No
+secrets to configure — visitors bring their own Anthropic key. The same site
+also ships as a container:
+[deploy/composer.Dockerfile](deploy/composer.Dockerfile) (multi-stage build →
+Caddy, `PORT`-aware) runs on any container host; the Railway deployment uses
+it with `RAILWAY_DOCKERFILE_PATH=deploy/composer.Dockerfile`. The deployed
+composer also accepts an `http://localhost:…` renderer URL in Settings for
+hybrid dev — browsers treat localhost as a trustworthy origin even inside an
+HTTPS page.
 
 ## Design decisions (and divergences from the handoff doc)
 

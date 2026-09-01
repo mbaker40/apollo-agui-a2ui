@@ -5,7 +5,7 @@ SHELL := /usr/bin/env bash
 # a loud SKIP so `make check` stays meaningful without it (see README matrix).
 SWIFT := $(shell command -v swift 2>/dev/null)
 
-.PHONY: help setup dev lint format format-check typecheck test e2e check transcripts clean
+.PHONY: help setup dev composer-dev lint format format-check typecheck test e2e check transcripts clean
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "} {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -16,6 +16,9 @@ setup: ## Install JS + Python deps (Gradle fetches on first build)
 
 dev: ## Run executor + graphql + agent + web locally (Ctrl-C stops all)
 	./scripts/dev.sh
+
+composer-dev: ## Run catalog + composer dev servers (Ctrl-C stops both)
+	./scripts/composer-dev.sh
 
 lint: ## Lint all packages
 	pnpm lint
@@ -59,5 +62,5 @@ transcripts: ## Re-record the SSE transcript fixtures from the live agent
 	node scripts/record-transcripts.mjs
 
 clean: ## Remove build artifacts
-	rm -rf node_modules **/node_modules apps/web/dist services/executor/data
+	rm -rf node_modules **/node_modules apps/web/dist apps/composer/dist apps/catalog/dist services/executor/data
 	cd packages/chat-core-kotlin && ./gradlew -q clean || true

@@ -136,11 +136,12 @@ Catalog → composer, once after `RENDERER_READY`:
 
 ```ts
 { type: 'COMPOSERX_SIDECAR_READY',
-  payload: { features: ['dnd-hittest', 'select', 'prop-specs'], version: 2 } }
+  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move'], version: 3 } }
 ```
 
-(Version 1 announced `['dnd-hittest']` only; the composer must treat every
-feature as independently optional — check the array, not the version.)
+(Version 1 announced `['dnd-hittest']` only; version 2 lacked `'move'`. The
+composer must treat every feature as independently optional — check the
+array, not the version.)
 
 Composer → catalog during a drag (throttle to animation frames):
 
@@ -270,6 +271,50 @@ Containment props are marked, never widget-edited. A renderer without this
 feature (official sample) sends nothing and the composer falls back to
 generic JSON prop rows.
 
+### 4e. Canvas move (feature `'move'`, edit mode only)
+
+Press-and-drag on an already-rendered component moves it — the Figma lift.
+The whole drag happens **inside the iframe** on the edit veil (plain
+pointer events with `setPointerCapture`, no HTML5 DnD, no composer
+overlay); only three messages cross the frame:
+
+```ts
+// catalog → composer
+{ type: 'COMPOSERX_MOVE_START',  payload: { id: string } }
+{ type: 'COMPOSERX_MOVE_DROP',   payload: {
+    id: string, containerId: string, index: number,
+    slot: 'before' | 'after' | 'into' } }
+{ type: 'COMPOSERX_MOVE_CANCEL', payload: { id: string } }
+```
+
+- **Start**: pointerdown on a component + movement past a ~5px threshold.
+  A sub-threshold pointerup stays a click (→ `COMPOSERX_SELECT`, §4c);
+  once a move has started, the click-derived SELECT for that gesture is
+  suppressed.
+- **Lift anchor**: climb from the deepest hit to the nearest component
+  whose parent reference is a **children-array splice** — pressing a
+  Button's label lifts the Button; pressing a Card's slot-bound interior
+  lifts the Card. If no such ancestor exists (root itself), no move
+  starts. `MOVE_START` carries the lift target's id (the composer selects
+  it).
+- **During the drag** the catalog renders: a translucent ghost following
+  the pointer (a cloned box or an accent-bordered rect labeled with the
+  component type — implementer's choice), the origin rect dimmed with a
+  dashed outline, and the §4b dashed drop indicators driven by the same
+  hit-test path — with the **moved subtree excluded from target
+  resolution** (hovering it resolves as if those nodes were absent).
+- **Drop**: pointerup with a resolved target → `MOVE_DROP` with the same
+  `containerId`/`index`/`slot` semantics as §4's DND_TARGET, where
+  `index` is the position in the container's children **after the moved
+  id is removed** (see §5). Pointerup with no valid target, or Escape
+  mid-drag (handled catalog-side — the iframe owns focus during the
+  gesture), → `MOVE_CANCEL`; all visuals clear either way.
+- The **composer stays authoritative**: it validates the drop
+  (`canMoveTo`, §5) and applies `moveComponent` — or ignores an invalid
+  one (the catalog does not mutate anything itself). No sidecar / no
+  `'move'` feature → no canvas move; the layout-tree drag (§7) is the
+  fallback.
+
 ## 5. Composer surface document + editing ops
 
 Composer state (single source of truth) is a `SurfaceDoc`:
@@ -311,11 +356,27 @@ Composer state (single source of truth) is a `SurfaceDoc`:
   parent schema-invalid, so the inspector disables Delete there with a
   hint ("delete the parent, or edit via JSON"). Every doc the op can
   produce stays schema-valid.
+- **Move op** (canvas move §4e + tree drag §7):
+  `moveComponent(doc, id, containerId, index)` re-homes the component and
+  its entire subtree — no id remapping, `dataModel` untouched: splice `id`
+  out of its current parent's `children`, then splice it into
+  `containerId`'s `children` at `index`, where `index` is interpreted
+  **after the removal** (so a same-container reorder needs no caller-side
+  adjustment; out-of-range indices clamp). It throws for: `root`; an
+  unknown `id` or `containerId`; a `containerId` outside the §3
+  children-array container set; a component whose parent reference is a
+  **single slot** (same rule and reason as the remove op); and a
+  `containerId` that is `id` itself or anywhere inside `id`'s subtree
+  (would orphan the branch). `canMoveTo(doc, id, containerId)` exposes the
+  same checks as `{ok: true} | {ok: false, reason}` for UI affordances —
+  both drag surfaces consult it instead of try/catching.
 - Undo/redo: bounded snapshot stack of serialized docs (50 entries) —
-  every applied insert/JSON-apply/chat-apply/prop-commit/remove pushes one.
+  every applied insert/JSON-apply/chat-apply/prop-commit/remove/move
+  pushes one.
 - All ops are pure functions in `src/lib/surface-doc.ts` with unit tests
   (id remap, splice positions, orphan invariant, round-trip
-  parse(serialize(doc)) === doc, prop guards, remove-subtree behavior).
+  parse(serialize(doc)) === doc, prop guards, remove-subtree behavior,
+  move semantics incl. same-container reorder and subtree/slot refusals).
 
 ## 6. Styling contract (catalog reskin)
 
@@ -385,6 +446,27 @@ children-array container, else its nearest container ancestor, else root.
 Selecting auto-switches the right sidebar to **Design**; Escape or a
 background click deselects. Stale ids (after undo/JSON apply/chat apply)
 clear the selection.
+
+**Moving placed components** — two drag surfaces over the same §5 move op,
+each one undo step:
+
+- **Canvas move** (§4e, edit mode, sidecar feature `'move'`): press and
+  drag a rendered component; the catalog lifts it (ghost + dimmed origin +
+  §4b dashed indicators), the composer receives `MOVE_START` (selects the
+  component and shows a status hint), validates `MOVE_DROP` via
+  `canMoveTo`, and applies `moveComponent`. Invalid drops and
+  `MOVE_CANCEL` change nothing.
+- **Layout-tree drag** (works with ANY renderer, sidecar or not): every
+  tree row is draggable. Hovering a row resolves by thirds — upper third
+  → before it in its parent, lower third → after, middle third → into it
+  (only when the row is a children-array container; otherwise the middle
+  behaves as before/after by half). Indicators reuse the dashed language:
+  a dashed insertion line between rows, a dashed outline on an 'into'
+  row. Targets rejected by `canMoveTo` (own subtree, single-slot
+  occupants, non-containers for 'into') render as no-drop and refuse the
+  drop. Tree rows ALSO accept glossary-tile drags with the same
+  position resolution, inserting the usage snippet at that spot (§5
+  insert op with an explicit index).
 
 **Design tab (inspector)**: empty-state hint when nothing is selected;
 otherwise: component type + id header, widget-per-prop form driven by

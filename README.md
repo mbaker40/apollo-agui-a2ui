@@ -74,7 +74,7 @@ fixtures, identity-header names, and recorded real-agent SSE transcripts.
 | `apps/web/`                  | React + Apollo Client 4.2 + raw `@ag-ui/client` chat, RefetchEventManager reconciliation | vitest (11)               |
 | `apps/android/`              | Thin Compose + Apollo Kotlin shell over the Kotlin core                                  | build locally             |
 | `apps/ios/`                  | Thin SwiftUI + Apollo iOS shell over the Swift core (XcodeGen)                           | build locally             |
-| `apps/composer/`             | Custom A2UI composer shell: glossary DnD, iframe canvas, JSON drawer, Anthropic chat     | vitest                    |
+| `apps/composer/`             | Custom A2UI composer shell: glossary DnD, iframe canvas, JSON drawer, Anthropic chat     | vitest (86)               |
 | `apps/catalog/`              | Custom-styled A2UI basic-catalog renderer the composer iframes (+ DnD sidecar)           | vitest (23)               |
 | `packages/a2ui-bridge/`      | Vendored renderer-side A2UI Preview Bridge (official composer repo, Apache-2.0)          | vendored — see its README |
 | `packages/chat-core-kotlin/` | Pure-JVM AG-UI core: SSE parser, session/tool loop, invalidation bus                     | JUnit (20)                |
@@ -134,14 +134,15 @@ audit attribution, read-then-write, and the hybrid frontend-tool round trip
 
 ### Verification matrix (honest)
 
-| Layer                      | Proven in-session by                                                                                                                          | Deferred to user machine                                                      |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| executor / graphql / agent | unit + e2e suites; checked-in real SSE transcripts (`contracts/fixtures/transcripts/`, re-record via `make transcripts`)                      | —                                                                             |
-| web                        | component tests (exact refetch counts, tool loop over recorded transcripts) + Playwright-driven live-stack screenshots in `docs/screenshots/` | —                                                                             |
-| chat-core-kotlin           | `./gradlew test` (17 tests incl. MockWebServer transport)                                                                                     | Android app shell build/run                                                   |
-| chat-core-swift            | — (egress policy blocked every Swift toolchain source in the authoring session; **code is not compile-verified**)                             | `swift test` (Linux or macOS), then iOS shell                                 |
-| docker-compose             | `docker compose config` validation                                                                                                            | `docker compose up --build` (registry blob downloads were blocked in-session) |
-| android / ios shells       | code review only                                                                                                                              | build + run per app README                                                    |
+| Layer                      | Proven in-session by                                                                                                                                                                                         | Deferred to user machine                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| executor / graphql / agent | unit + e2e suites; checked-in real SSE transcripts (`contracts/fixtures/transcripts/`, re-record via `make transcripts`)                                                                                     | —                                                                                       |
+| web                        | component tests (exact refetch counts, tool loop over recorded transcripts) + Playwright-driven live-stack screenshots in `docs/screenshots/`                                                                | —                                                                                       |
+| chat-core-kotlin           | `./gradlew test` (17 tests incl. MockWebServer transport)                                                                                                                                                    | Android app shell build/run                                                             |
+| chat-core-swift            | — (egress policy blocked every Swift toolchain source in the authoring session; **code is not compile-verified**)                                                                                            | `swift test` (Linux or macOS), then iOS shell                                           |
+| docker-compose             | `docker compose config` validation                                                                                                                                                                           | `docker compose up --build` (registry blob downloads were blocked in-session)           |
+| android / ios shells       | code review only                                                                                                                                                                                             | build + run per app README                                                              |
+| composer + catalog         | 86 + 23 vitest tests; live cross-frame Playwright drive (handshake, positional drag-drop via the sidecar, undo, mock-LLM apply, theme, SEND_TO_SERVER) with screenshots in `docs/screenshots/composer-*.png` | real-key Anthropic chat (bring your own key); Pages deploy (enable Pages, push to main) |
 
 Full transcripts and the exact blocked-network details:
 [docs/VERIFICATION.md](docs/VERIFICATION.md).

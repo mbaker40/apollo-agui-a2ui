@@ -126,3 +126,41 @@ After the full build + test cycle above, `git status` is clean — the root
 `.gitignore` covers node_modules, dist, coverage, `.venv`, `__pycache__`,
 Gradle/Android artifacts, SwiftPM `.build`, Xcode noise, env files, the
 executor's local data dir, and the generated iOS GraphQL package.
+
+## Composer initiative addendum (custom A2UI composer)
+
+Proven in this authoring session:
+
+- **Unit/component**: composer 86 vitest tests (surface-doc ops, bridge-host
+  origin/buffering/handshake, store, JSON extraction, system prompt, drawer
+  and chat flows, Anthropic client against a mocked SDK), catalog 23 (usages
+  schema-validation against the real renderer zod schemas, sidecar hit-test
+  math, app smoke).
+- **Live cross-frame drive** (Playwright + the preinstalled chromium against
+  both dev servers, composer 7464 ↔ catalog 7465): renderer handshake with
+  the `?origin=` pairing; the welcome layout rendered inside the iframe;
+  glossary populated with all 18 components; `COMPOSERX_SIDECAR_READY`
+  observed; **positional drag-and-drop of a Button through the sidecar**
+  (remapped `-g<n>` id landed in the layout JSON and rendered); undo;
+  mock-LLM chat stream applied on completion and rendered; theme toggle
+  flipping shell AND renderer to dark; an in-canvas button click surfacing
+  as `SEND_TO_SERVER` in the events drawer. Screenshots:
+  `docs/screenshots/composer-{light,chat-applied,dark}.png`.
+- **Seed-payload schema conformance**: the welcome layout, recorded-mock
+  payload, and empty doc all validate against `@a2ui/web_core`'s actual
+  component schemas (strict zod; one bad component rejects a whole update).
+- **Pages tree**: both apps built with the production base paths, assembled,
+  and served locally — asset URLs and the `catalog/catalog` fetch path all
+  returned 200.
+
+Deferred to the user:
+
+- **Real Anthropic chat** needs a real API key (Settings gear; browser-direct
+  calls). The streaming/error/abort paths are unit-tested against the mocked
+  SDK; the recorded mock covers the UI flow end-to-end without a key.
+- **Actual GitHub Pages deploy**: enable Pages (Settings → Pages → Source:
+  GitHub Actions) once; the workflow ships on push to main.
+- **Our catalog inside the official hosted composer**: run
+  `pnpm --filter @mwe/composer-catalog dev` and paste
+  `http://localhost:7465/` as the renderer URL (not exercised in-session —
+  the hosted composer's origin wasn't reachable through the session proxy).

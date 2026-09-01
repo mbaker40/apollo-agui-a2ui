@@ -2,10 +2,10 @@
  * Pure logic for the COMPOSERX drag-and-drop sidecar (contract sections 4, 4e
  * and 4f): mirrors the component tree from RENDER_A2UI traffic, resolves a
  * hover point + deepest-hit component id into a drop target
- * (`containerId`/`index`/`slot`/`rect`) — optionally with a moved component's
- * subtree excluded — resolves the canvas-move lift anchor, and computes the
- * marquee candidate set (topmost-intersecting rule). DOM concerns live in
- * sidecar.ts.
+ * (`containerId`/`index`/`slot`/`rect`) — optionally with one or more moved
+ * components' subtrees excluded (single move 4e, group move 4e/v5) — resolves
+ * the canvas-move lift anchor, and computes the marquee candidate set
+ * (topmost-intersecting rule). DOM concerns live in sidecar.ts.
  */
 
 export interface Rect {
@@ -224,15 +224,17 @@ export interface ResolveDropTargetArgs {
   /** Viewport rect, used as the indicator fallback for the empty canvas. */
   viewport: Rect;
   /**
-   * Canvas move (contract section 4e): id of the component being moved. Its
-   * entire subtree is excluded from resolution — a hit inside it resolves as
-   * if those nodes were absent (the pointer targets the moved component's
-   * parent context), and children arrays are viewed without the moved id, so
-   * every emitted `index` is a position in the target container's children
-   * AFTER the moved id's removal (the section-5 move-op rule). A container
-   * being moved can never be its own target.
+   * Canvas move (contract section 4e; group move 4e/v5): id — or ids — of the
+   * component(s) being moved. The union of their entire subtrees is excluded
+   * from resolution — a hit inside any of them resolves as if those nodes
+   * were absent (the pointer targets the nearest surviving ancestor context),
+   * and children arrays are viewed without every moved id, so every emitted
+   * `index` is a position in the target container's children AFTER all moved
+   * ids' removal (the section-5 move-op rule). A container being moved can
+   * never be its own target. Ids unknown to the store are ignored; an empty
+   * list behaves like no exclusion.
    */
-  excludeSubtree?: string;
+  excludeSubtree?: string | readonly string[];
 }
 
 const NO_TARGET: DropTarget = {
@@ -248,23 +250,38 @@ const NO_TARGET: DropTarget = {
  * children along the main axis, or at the end); leaf -> 'before'/'after'
  * within its nearest ancestor holding a `children` array; empty canvas or
  * background -> 'into' the root container. With `excludeSubtree` set
- * (canvas move, section 4e) the moved subtree is removed from the view
- * first — see the field's doc for the exact semantics.
+ * (canvas move, section 4e; one id or — group move, 4e/v5 — a list of ids)
+ * the union of the moved subtrees is removed from the view first — see the
+ * field's doc for the exact semantics.
  */
 export function resolveDropTarget(args: ResolveDropTargetArgs): DropTarget {
-  const excludeId = args.excludeSubtree;
-  if (excludeId === undefined || !args.store.components.has(excludeId)) {
+  const excludeIds = (
+    typeof args.excludeSubtree === 'string' ? [args.excludeSubtree] : (args.excludeSubtree ?? [])
+  ).filter((id) => args.store.components.has(id));
+  if (excludeIds.length === 0) {
     return resolveInView(args);
   }
-  const excluded = collectSubtreeIds(args.store, excludeId);
-  // A hit inside the moved subtree targets the parent context: with the
-  // subtree absent, the pointer over that area falls onto the container the
-  // moved component currently sits in (a children-array container per the
-  // lift-anchor rule).
-  const hitId =
-    args.hitId !== null && excluded.has(args.hitId)
-      ? (buildParentIndex(args.store).get(excludeId) ?? null)
-      : args.hitId;
+  const excluded = new Set<string>();
+  for (const excludeId of excludeIds) {
+    for (const member of collectSubtreeIds(args.store, excludeId)) excluded.add(member);
+  }
+  // A hit inside any moved subtree targets the parent context: with those
+  // nodes absent, the pointer over that area falls onto the nearest ancestor
+  // that survives the exclusion (for a single move, the children-array
+  // container the moved component currently sits in, per the lift-anchor
+  // rule; for a group, climbing continues through moved ancestors — a member
+  // nested inside another member never re-introduces an excluded context).
+  let hitId = args.hitId;
+  if (hitId !== null && excluded.has(hitId)) {
+    const parents = buildParentIndex(args.store);
+    const seen = new Set<string>();
+    let cursor: string | undefined = hitId;
+    while (cursor !== undefined && excluded.has(cursor) && !seen.has(cursor)) {
+      seen.add(cursor);
+      cursor = parents.get(cursor);
+    }
+    hitId = cursor !== undefined && !excluded.has(cursor) ? cursor : null;
+  }
   const components = new Map<string, ComponentInstance>();
   for (const [id, comp] of args.store.components) {
     if (excluded.has(id)) continue;

@@ -1,5 +1,5 @@
 /**
- * COMPOSERX sidecar v4 (contract sections 4, 4b, 4c, 4d, 4e, 4f). Rides the
+ * COMPOSERX sidecar v5 (contract sections 4, 4b, 4c, 4d, 4e, 4f). Rides the
  * same postMessage channel as the Preview Bridge with the same origin rules:
  * accepts host messages via DomainOriginVerificationService, replies to the
  * origin given by `?origin=` (falling back to our own origin, exactly like
@@ -58,6 +58,23 @@
  *   gets a lighter 1.5px / 70%-accent outline; all outlines re-anchor after
  *   RENDER_A2UI through the same machinery, and ids that no longer render
  *   are dropped individually. A payload without `ids` behaves exactly as v3.
+ * - v5 (group-move, section 4e "Group move"): pressing a component that is a
+ *   MEMBER of the current multi-selection lifts the whole selection. The
+ *   decision happens the moment a 4e lift starts (threshold crossed before
+ *   the long-press fired): resolve the lift anchor as before; if that anchor
+ *   is in the ids of the last received COMPOSERX_SET_SELECTION AND that list
+ *   has >= 2 entries, the lift is a group lift — MOVE_START and MOVE_DROP
+ *   gain `ids` = that stored list (snapshotted for the whole gesture; the
+ *   pressed anchor stays `id`, the grab handle). Otherwise the lift is a
+ *   single move with byte-identical v4 payloads (no `ids` key at all).
+ *   During a group drag every moved origin rect gets the same dashed-outline
+ *   dim treatment, EVERY moved subtree is excluded from drop-target
+ *   resolution (union — hovering any moved node resolves as if those nodes
+ *   were absent, so `index` is the position after ALL moved ids are
+ *   removed), and the ghost is labeled with the count ("3 components")
+ *   instead of the component type. MOVE_CANCEL is unchanged ({id} only), and
+ *   long-press/threshold timing is untouched: a sub-threshold press held
+ *   ~350ms still additive-toggles and never lifts.
  */
 
 import { DomainOriginVerificationService } from 'a2ui-bridge';
@@ -87,15 +104,16 @@ export const COMPOSERX_MOVE_DROP = 'COMPOSERX_MOVE_DROP';
 export const COMPOSERX_MOVE_CANCEL = 'COMPOSERX_MOVE_CANCEL';
 export const COMPOSERX_MARQUEE = 'COMPOSERX_MARQUEE';
 
-/** Contract section 4: sidecar v4 announcement payload. */
+/** Contract section 4: sidecar v5 announcement payload. */
 export const SIDECAR_FEATURES = [
   'dnd-hittest',
   'select',
   'prop-specs',
   'move',
   'multi-select',
+  'group-move',
 ] as const;
-export const SIDECAR_VERSION = 4;
+export const SIDECAR_VERSION = 5;
 
 export const DROP_INDICATOR_LAYER_ID = 'composerx-drop-indicator-layer';
 export const EDIT_VEIL_ID = 'composerx-edit-veil';
@@ -191,6 +209,13 @@ interface ComponentGesture extends GestureBase {
    * click and long-press paths still apply.
    */
   moveId: string | null;
+  /**
+   * Contract 4e group move (v5): the full moved list when the lift was a
+   * GROUP lift — the last SET_SELECTION `ids` snapshotted at lift time
+   * (>= 2 entries, anchor included). null = single move; MOVE_START/DROP
+   * then carry no `ids` key at all (byte-identical v4 payloads).
+   */
+  moveIds: string[] | null;
   componentType: string;
   /** Pending 4f long-press timer; cleared on threshold-cross/up/cancel. */
   longPressTimer: ReturnType<typeof setTimeout> | null;
@@ -684,6 +709,7 @@ function onVeilPointerDown(event: PointerEvent): void {
     startY: event.clientY,
     hitId,
     moveId,
+    moveIds: null, // decided at lift time (startMove), not at pointerdown
     componentType: store.components.get(moveId ?? hitId)?.component ?? 'Component',
     active: false,
     longPressTimer: null,
@@ -794,6 +820,14 @@ function startMove(g: ComponentGesture): void {
   if (g.moveId === null) return; // guarded by the caller
   g.active = true;
   suppressClickOnce = true;
+  // Contract 4e group-lift decision (v5): the anchor is a MEMBER of the
+  // current multi-selection — the ids of the last received SET_SELECTION
+  // (stored in selectedIds, [] for a v3 {id}-only payload) — and that list
+  // has >= 2 entries, so the whole selection lifts. The list is snapshotted
+  // here: MOVE_DROP must carry exactly what MOVE_START announced even if a
+  // SET_SELECTION lands mid-drag. A non-member (or a singleton/empty list)
+  // keeps the single lift with byte-identical v4 payloads.
+  g.moveIds = selectedIds.length >= 2 && selectedIds.includes(g.moveId) ? [...selectedIds] : null;
   g.originRect = rectForComponent(g.moveId);
   if (g.originRect !== null) {
     g.grabDx = clamp(g.startX - g.originRect.x, 0, g.originRect.width);
@@ -807,20 +841,32 @@ function startMove(g: ComponentGesture): void {
   // Escape cancels mid-drag; the iframe owns focus during the gesture, so the
   // listener lives here (window, capture) and only while a move is active.
   window.addEventListener('keydown', onGestureKeyDown, true);
-  postToParent({ type: COMPOSERX_MOVE_START, payload: { id: g.moveId } });
+  postToParent({
+    type: COMPOSERX_MOVE_START,
+    payload: g.moveIds === null ? { id: g.moveId } : { id: g.moveId, ids: [...g.moveIds] },
+  });
   renderMoveScaffold(g);
 }
 
-/** Ghost (follows the pointer) + dimmed dashed-outline origin rect. */
+/**
+ * Ghost (follows the pointer) + dimmed dashed-outline origin rect(s). A group
+ * lift (contract 4e/v5) dims EVERY moved origin rect — one box per id in the
+ * moved list, each with the exact single-move treatment; ids that do not
+ * render (stale selection entries) are skipped individually.
+ */
 function renderMoveScaffold(g: ComponentGesture): void {
   const layer = ensureLayer(MOVE_LAYER_ID, Z_MOVE);
   if (layer === null) return;
   layer.replaceChildren();
 
-  if (g.originRect !== null) {
+  const originIds = g.moveIds ?? (g.moveId !== null ? [g.moveId] : []);
+  for (const id of originIds) {
+    const rect = id === g.moveId ? g.originRect : rectForComponent(id);
+    if (rect === null) continue;
     const origin = document.createElement('div');
     origin.setAttribute('data-composerx-move', 'origin');
-    positionBox(origin, g.originRect);
+    origin.setAttribute('data-composerx-move-id', id);
+    positionBox(origin, rect);
     Object.assign(origin.style, {
       borderStyle: 'dashed',
       borderWidth: '1px',
@@ -850,7 +896,10 @@ function renderMoveScaffold(g: ComponentGesture): void {
   });
   const label = document.createElement('div');
   label.setAttribute('data-composerx-move', 'ghost-label');
-  label.textContent = g.componentType;
+  // Contract 4e/v5: a group ghost is labeled with the count ("3 components"),
+  // a single move keeps the component type (group implies >= 2, so the label
+  // is always plural).
+  label.textContent = g.moveIds === null ? g.componentType : `${g.moveIds.length} components`;
   Object.assign(label.style, {
     position: 'absolute',
     top: '0',
@@ -884,10 +933,11 @@ function positionGhost(x: number, y: number): void {
 
 /**
  * The section-4b indicators driven by the same hit-test path as DND_HOVER,
- * with the moved subtree excluded from resolution (contract 4e) — indices
- * come out relative to the target's children AFTER the moved id's removal.
+ * with the moved subtree — or, on a group lift, the union of EVERY moved
+ * subtree — excluded from resolution (contract 4e) — indices come out
+ * relative to the target's children AFTER all moved ids' removal.
  */
-function resolveMoveTarget(x: number, y: number, moveId: string): DropTarget {
+function resolveMoveTarget(x: number, y: number, exclude: string | readonly string[]): DropTarget {
   return resolveDropTarget({
     x,
     y,
@@ -895,7 +945,7 @@ function resolveMoveTarget(x: number, y: number, moveId: string): DropTarget {
     store,
     getRect: rectForComponent,
     viewport: viewportRect(),
-    excludeSubtree: moveId,
+    excludeSubtree: exclude,
   });
 }
 
@@ -905,7 +955,7 @@ function refreshMoveVisuals(): void {
   if (g === null || g.kind !== 'component' || !g.active || movePoint === null) return;
   if (g.moveId === null) return; // unreachable: active implies a lift anchor
   positionGhost(movePoint.x, movePoint.y);
-  drawIndicator(resolveMoveTarget(movePoint.x, movePoint.y, g.moveId));
+  drawIndicator(resolveMoveTarget(movePoint.x, movePoint.y, g.moveIds ?? g.moveId));
 }
 
 /** Clears everything a move drew; never touches the selection outline. */
@@ -1023,8 +1073,12 @@ function onVeilPointerUp(event: PointerEvent): void {
   if (g.moveId === null) return; // unreachable: active implies a lift anchor
   clearMoveVisuals();
   // Re-resolve at the drop point (the rAF-throttled state may lag a frame).
-  const target = resolveMoveTarget(event.clientX, event.clientY, g.moveId);
+  const target = resolveMoveTarget(event.clientX, event.clientY, g.moveIds ?? g.moveId);
   if (target.containerId !== null && target.index !== null && target.slot !== null) {
+    // A group lift (4e/v5) carries the SAME ids MOVE_START announced; a
+    // single lift stays the byte-identical v4 payload (no ids key at all).
+    // The excluded-view resolution above already made `index` the position
+    // after every moved id is removed. MOVE_CANCEL is unchanged either way.
     postToParent({
       type: COMPOSERX_MOVE_DROP,
       payload: {
@@ -1032,6 +1086,7 @@ function onVeilPointerUp(event: PointerEvent): void {
         containerId: target.containerId,
         index: target.index,
         slot: target.slot,
+        ...(g.moveIds === null ? {} : { ids: [...g.moveIds] }),
       },
     });
   } else {

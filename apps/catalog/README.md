@@ -2,13 +2,14 @@
 
 Custom-styled React **basic catalog renderer** for the A2UI composer. Runs in a
 sandboxed iframe and speaks the official A2UI Preview Bridge protocol (via the
-vendored `packages/a2ui-bridge`), plus the additive `COMPOSERX_*` **sidecar v4**
+vendored `packages/a2ui-bridge`), plus the additive `COMPOSERX_*` **sidecar v5**
 defined in [`docs/composer/CONTRACT.md`](../../docs/composer/CONTRACT.md)
 (sections 4, 4b, 4c, 4d, 4e, 4f): drag-and-drop hit-testing with Figma-like
 dashed drop indicators, edit/preview modes with click-to-select and selection
 outlines, schema-derived prop specs, press-and-drag canvas move of placed
-components, and marquee + multi-select (rubber-band selection, shift-click /
-long-press additive selects, multi-outlines). Dev port: **7465**.
+components, marquee + multi-select (rubber-band selection, shift-click /
+long-press additive selects, multi-outlines), and group move (dragging a
+member of the multi-selection lifts the whole selection). Dev port: **7465**.
 
 ## Quickstart
 
@@ -69,14 +70,14 @@ var(--a2ui-border))`). `basicCatalog.themeSchema` is **undefined** in 0.10.2,
   sample we configure no markdown renderer, so it renders as plain text (the
   package logs a one-time console warning).
 
-## COMPOSERX sidecar v4
+## COMPOSERX sidecar v5
 
 Message shapes and semantics: contract sections 4/4b/4c/4d/4e/4f. Features
 announced right after the bridge handshake:
 
 ```ts
 { type: 'COMPOSERX_SIDECAR_READY',
-  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move', 'multi-select'], version: 4 } }
+  payload: { features: ['dnd-hittest', 'select', 'prop-specs', 'move', 'multi-select', 'group-move'], version: 5 } }
 ```
 
 immediately followed by `COMPOSERX_PROP_SPECS` (section 4d, below). Both are
@@ -164,8 +165,8 @@ the Figma lift. The whole gesture runs inside the iframe on the edit veil
 messages cross the frame:
 
 ```ts
-{ type: 'COMPOSERX_MOVE_START',  payload: { id } }                            // catalog → composer
-{ type: 'COMPOSERX_MOVE_DROP',   payload: { id, containerId, index, slot } } // slot: before|after|into
+{ type: 'COMPOSERX_MOVE_START',  payload: { id, ids? } }                            // catalog → composer
+{ type: 'COMPOSERX_MOVE_DROP',   payload: { id, containerId, index, slot, ids? } } // slot: before|after|into
 { type: 'COMPOSERX_MOVE_CANCEL', payload: { id } }
 ```
 
@@ -201,6 +202,16 @@ messages cross the frame:
   catalog **mutates nothing**: the composer validates (`canMoveTo`) and
   applies `moveComponent`, then re-sends `RENDER_A2UI`, which re-anchors the
   selection outline through the existing path.
+- **Group move** (contract 4e "Group move", feature `'group-move'`, v5): when
+  the lift anchor is a **member of the last received `SET_SELECTION` ids**
+  and that list has ≥ 2 entries, the whole selection lifts — `MOVE_START` and
+  `MOVE_DROP` carry `ids` (the stored list, snapshotted at lift time; the
+  pressed anchor stays `id`). Every moved origin rect is dimmed, EVERY moved
+  subtree is excluded from target resolution (union — so `index` is the
+  position after ALL moved ids are removed), and the ghost is labeled with
+  the count ("2 components"). A non-member (or singleton selection) lift is a
+  byte-identical single move with no `ids` key; long-press timing and
+  `MOVE_CANCEL` are unchanged.
 
 ### Marquee + multi-select (contract 4f, feature `'multi-select'`)
 

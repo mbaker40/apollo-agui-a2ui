@@ -118,7 +118,7 @@ describe('ComposerX catalog app', () => {
     });
   }
 
-  it('dispatches RENDERER_READY, then SIDECAR_READY v4, then PROP_SPECS on mount', async () => {
+  it('dispatches RENDERER_READY, then SIDECAR_READY v5, then PROP_SPECS on mount', async () => {
     const postSpy = vi.spyOn(window.parent, 'postMessage');
     await mountApp();
 
@@ -131,8 +131,8 @@ describe('ComposerX catalog app', () => {
       expect.objectContaining({
         type: COMPOSERX_SIDECAR_READY,
         payload: {
-          features: ['dnd-hittest', 'select', 'prop-specs', 'move', 'multi-select'],
-          version: 4,
+          features: ['dnd-hittest', 'select', 'prop-specs', 'move', 'multi-select', 'group-move'],
+          version: 5,
         },
       }),
       window.location.origin,

@@ -111,13 +111,12 @@ export function ChatPanel({ createClient = selectLlmClient }: { createClient?: (
   };
 
   return (
-    <aside className="chat-panel" aria-label="Chat">
-      <header className="pane-header">
-        <h2>Chat</h2>
+    <div className="chat-panel" aria-label="Chat">
+      <div className="chat-status">
         <span className={`status-pill ${streaming ? 'busy' : ''}`}>
           {streaming ? 'streaming…' : 'idle'}
         </span>
-      </header>
+      </div>
       <div className="chat-messages" ref={listRef}>
         {messages.length === 0 && (
           <p className="empty-note">
@@ -194,6 +193,6 @@ export function ChatPanel({ createClient = selectLlmClient }: { createClient?: (
           </button>
         )}
       </form>
-    </aside>
+    </div>
   );
 }

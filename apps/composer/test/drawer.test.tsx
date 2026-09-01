@@ -9,7 +9,12 @@ import { createComposerStore } from '../src/state/store';
 function setup() {
   const sentRenders: RenderA2uiItem[][] = [];
   const store = createComposerStore();
-  store.attachPort({ sendRender: (items) => sentRenders.push(items), sendTheme: () => {} });
+  store.attachPort({
+    sendRender: (items) => sentRenders.push(items),
+    sendTheme: () => {},
+    sendSetMode: () => {},
+    sendSetSelection: () => {},
+  });
   const view = render(
     <StoreProvider store={store}>
       <Drawer />

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DndHoverPayload, DndTargetPayload } from '../lib/bridge-host';
-import { BridgeHost } from '../lib/bridge-host';
+import { BridgeHost, SIDECAR_FEATURE_DND } from '../lib/bridge-host';
 import { buildIframeSrc } from '../lib/settings';
-import { toRenderMessages } from '../lib/surface-doc';
+import { insertTargetFor, toRenderMessages } from '../lib/surface-doc';
 import { useComposerState, useStore } from '../state/context';
 import { DRAG_MIME } from './Glossary';
 import { Drawer } from './Drawer';
@@ -45,6 +45,9 @@ export function CanvasPane() {
     const host = new BridgeHost({
       getTheme: () => store.getState().settings.theme,
       getRenderItems: () => toRenderMessages(store.getState().doc),
+      // Mode + selection survive a renderer reload: re-sent post-RENDER_A2UI.
+      getMode: () => store.getState().mode,
+      getSelection: () => store.getState().selectedComponentId,
       onReady: () => {
         readyRef.current = true;
         store.actions.bridgeReady();
@@ -63,6 +66,8 @@ export function CanvasPane() {
       onDndTarget: (payload) => {
         dndTargetRef.current = payload;
       },
+      onSelect: (payload) => store.actions.bridgeSelect(payload),
+      onPropSpecs: (payload) => store.actions.bridgePropSpecs(payload),
       onUnknown: (type, payload) => store.actions.bridgeUnknown(type, payload),
     });
     host.register(iframe, rendererUrl);
@@ -122,9 +127,11 @@ export function CanvasPane() {
         index: target.index,
       });
     } else {
-      // Structural fallback (no sidecar / no hit): end of the selected container.
+      // Structural fallback (no sidecar / no hit): end of the container
+      // derived from the unified selection (contract §7).
+      const s = store.getState();
       store.actions.insertComponent(name, {
-        containerId: store.getState().selectedContainerId,
+        containerId: insertTargetFor(s.doc, s.selectedComponentId),
       });
     }
     hostRef.current?.sendDndEnd();
@@ -134,7 +141,10 @@ export function CanvasPane() {
   const ready = state.handshake.ready;
   const timedOut = state.handshake.timedOut;
   const theme = state.settings.theme;
+  const mode = state.mode;
   const status = ready ? 'ok' : timedOut ? 'err' : 'wait';
+  const dndSidecar = state.handshake.sidecarFeatures.includes(SIDECAR_FEATURE_DND);
+  const structuralTarget = insertTargetFor(state.doc, state.selectedComponentId);
 
   return (
     <section className="canvas-pane" aria-label="Canvas">
@@ -171,6 +181,26 @@ export function CanvasPane() {
         >
           {theme === 'light' ? '◑ Dark' : '◐ Light'}
         </button>
+        <div className="mode-toggle" role="group" aria-label="Canvas mode">
+          <button
+            data-testid="mode-edit"
+            title="Edit mode"
+            aria-pressed={mode === 'edit'}
+            className={mode === 'edit' ? 'active' : ''}
+            onClick={() => store.actions.setMode('edit')}
+          >
+            Edit
+          </button>
+          <button
+            data-testid="mode-preview"
+            title="Preview mode"
+            aria-pressed={mode === 'preview'}
+            className={mode === 'preview' ? 'active' : ''}
+            onClick={() => store.actions.setMode('preview')}
+          >
+            Preview
+          </button>
+        </div>
         <span className="toolbar-spacer" />
         <span className={`renderer-url dot-${status}`} title={rendererUrl}>
           <span className="dot" aria-hidden />
@@ -230,9 +260,9 @@ export function CanvasPane() {
               onDrop={onOverlayDrop}
             >
               <span className="drop-hint">
-                {state.handshake.sidecar
+                {dndSidecar
                   ? 'Drop to insert at the highlighted position'
-                  : `Drop to insert into ${state.selectedContainerId}`}
+                  : `Drop to insert into #${structuralTarget}`}
               </span>
             </div>
           )}

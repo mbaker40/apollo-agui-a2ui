@@ -19,6 +19,21 @@ export const ROOT_ID = 'root';
  */
 export const CONTAINER_COMPONENTS: ReadonlySet<string> = new Set(['Row', 'Column', 'List']);
 
+/**
+ * Keys the prop ops refuse to touch (contract §5): identity (`id`,
+ * `component`) and the containment keys — those are edited structurally
+ * (insert/remove/JSON), never through the inspector's prop widgets.
+ */
+export const GUARDED_PROP_KEYS: ReadonlySet<string> = new Set([
+  'id',
+  'component',
+  'children',
+  'child',
+  'trigger',
+  'content',
+  'tabs',
+]);
+
 /** A component instance in the flat list. Unknown fields are preserved verbatim. */
 export interface DocComponent {
   id: string;
@@ -388,6 +403,187 @@ export function insertUsage(
 /** Ids of components that can receive inserts, in flat-list order. */
 export function listContainers(doc: SurfaceDoc): string[] {
   return doc.components.filter((c) => CONTAINER_COMPONENTS.has(c.component)).map((c) => c.id);
+}
+
+function findComponent(doc: SurfaceDoc, id: string): DocComponent {
+  const found = doc.components.find((c) => c.id === id);
+  if (!found) {
+    throw new Error(`component "${id}" does not exist in the document`);
+  }
+  return found;
+}
+
+function guardPropKey(key: string): void {
+  if (GUARDED_PROP_KEYS.has(key)) {
+    throw new Error(
+      `prop "${key}" cannot be edited directly (${[...GUARDED_PROP_KEYS].join(', ')} ` +
+        'are structural — edit them via insert/remove/JSON)',
+    );
+  }
+}
+
+/**
+ * Sets one prop on one component (contract §5). Pure: returns a new doc,
+ * never mutates the input; the value (arbitrary JSON) is deep-cloned in.
+ * Throws on unknown id and on guarded keys (`id`, `component`, containment).
+ */
+export function setComponentProp(
+  doc: SurfaceDoc,
+  id: string,
+  key: string,
+  value: unknown,
+): SurfaceDoc {
+  findComponent(doc, id);
+  guardPropKey(key);
+  const components = doc.components.map((c) =>
+    c.id === id ? ({ ...c, [key]: structuredClone(value) } as DocComponent) : c,
+  );
+  return { ...doc, components };
+}
+
+/**
+ * Removes one prop from one component (contract §5). Same guards as
+ * setComponentProp; removing a key the component does not have is a no-op
+ * (still returns a fresh doc object).
+ */
+export function removeComponentProp(doc: SurfaceDoc, id: string, key: string): SurfaceDoc {
+  findComponent(doc, id);
+  guardPropKey(key);
+  const components = doc.components.map((c) => {
+    if (c.id !== id || !(key in c)) return c;
+    const next = { ...c } as Record<string, unknown>;
+    delete next[key];
+    return next as DocComponent;
+  });
+  return { ...doc, components };
+}
+
+/**
+ * The id of a component that references `id` through a single slot
+ * (`child`, `trigger`, `content`, or `tabs[].child`), or null. A single-slot
+ * occupant cannot be removed on its own — deleting it would leave the parent
+ * schema-invalid — so the inspector disables Delete when this is non-null.
+ */
+export function singleSlotParentOf(doc: SurfaceDoc, id: string): string | null {
+  for (const c of doc.components) {
+    if (c.id === id) continue;
+    if (c.child === id || c.trigger === id || c.content === id) return c.id;
+    if (Array.isArray(c.tabs) && c.tabs.some((t) => isRecord(t) && t.child === id)) {
+      return c.id;
+    }
+  }
+  return null;
+}
+
+function reachableIds(components: DocComponent[]): Set<string> {
+  const known = new Set(components.map((c) => c.id));
+  const byId = new Map<string, DocComponent>();
+  for (const c of components) {
+    if (!byId.has(c.id)) byId.set(c.id, c);
+  }
+  const reachable = new Set<string>();
+  const queue: string[] = [ROOT_ID];
+  while (queue.length > 0) {
+    const id = queue.pop();
+    if (id === undefined || reachable.has(id)) continue;
+    reachable.add(id);
+    const comp = byId.get(id);
+    if (!comp) continue;
+    const refs = new Set<string>();
+    for (const [key, value] of Object.entries(comp)) {
+      if (key === 'id' || key === 'component') continue;
+      collectReferences(value, known, refs);
+    }
+    for (const ref of refs) {
+      if (!reachable.has(ref)) queue.push(ref);
+    }
+  }
+  return reachable;
+}
+
+/**
+ * Removes a component and its entire subtree (contract §5): the id is
+ * spliced out of every `children` array that lists it, and every component
+ * that was reachable from root only through it is dropped too (components
+ * shared with the rest of the tree survive; pre-existing orphans from a
+ * tolerated JSON paste are left alone). Throws for `root`, for unknown ids,
+ * and for single-slot occupants (see singleSlotParentOf) — every doc this
+ * op can produce stays schema-valid. Pure: never mutates the input.
+ */
+export function removeComponent(doc: SurfaceDoc, id: string): SurfaceDoc {
+  if (id === ROOT_ID) {
+    throw new Error(`cannot remove "${ROOT_ID}" — clear the canvas instead`);
+  }
+  findComponent(doc, id);
+  const slotParent = singleSlotParentOf(doc, id);
+  if (slotParent !== null) {
+    const parent = doc.components.find((c) => c.id === slotParent);
+    throw new Error(
+      `cannot remove "${id}": it fills a single slot of ${parent?.component ?? 'component'} ` +
+        `"${slotParent}" — delete the parent instead, or edit via JSON`,
+    );
+  }
+
+  const reachableBefore = reachableIds(doc.components);
+  const spliced = doc.components.map((c) => {
+    if (!Array.isArray(c.children) || !c.children.includes(id)) return c;
+    return { ...c, children: c.children.filter((childId) => childId !== id) } as DocComponent;
+  });
+  const reachableAfter = reachableIds(spliced);
+  const dropped = new Set<string>([id]);
+  for (const reachable of reachableBefore) {
+    if (!reachableAfter.has(reachable)) dropped.add(reachable);
+  }
+  const components = spliced.filter((c) => !dropped.has(c.id));
+  return { ...doc, components };
+}
+
+/**
+ * Where a glossary insert goes given the current selection (contract §7):
+ * the selected component itself if it is a children-array container, else
+ * its nearest ancestor (walking the same reference edges as componentTree —
+ * through Card/Modal/Tabs slots) that is one, else root.
+ */
+export function insertTargetFor(doc: SurfaceDoc, selectedId: string | null): string {
+  if (selectedId === null) return ROOT_ID;
+  const selected = doc.components.find((c) => c.id === selectedId);
+  if (!selected) return ROOT_ID;
+  if (CONTAINER_COMPONENTS.has(selected.component)) return selectedId;
+
+  // Parent map by first discovery from root (mirrors componentTree's edges).
+  const known = new Set(doc.components.map((c) => c.id));
+  const byId = new Map<string, DocComponent>();
+  for (const c of doc.components) {
+    if (!byId.has(c.id)) byId.set(c.id, c);
+  }
+  const parentOf = new Map<string, string>();
+  const queue: string[] = [ROOT_ID];
+  const seen = new Set<string>([ROOT_ID]);
+  while (queue.length > 0) {
+    const id = queue.shift();
+    if (id === undefined) continue;
+    const comp = byId.get(id);
+    if (!comp) continue;
+    const refs = new Set<string>();
+    for (const [key, value] of Object.entries(comp)) {
+      if (key === 'id' || key === 'component') continue;
+      collectReferences(value, known, refs);
+    }
+    for (const ref of refs) {
+      if (seen.has(ref)) continue;
+      seen.add(ref);
+      parentOf.set(ref, id);
+      queue.push(ref);
+    }
+  }
+
+  let cursor = parentOf.get(selectedId);
+  while (cursor !== undefined) {
+    const comp = byId.get(cursor);
+    if (comp && CONTAINER_COMPONENTS.has(comp.component)) return cursor;
+    cursor = parentOf.get(cursor);
+  }
+  return ROOT_ID;
 }
 
 /**

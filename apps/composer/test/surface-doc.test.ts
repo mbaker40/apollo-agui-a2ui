@@ -1,15 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import type { SurfaceDoc } from '../src/lib/surface-doc';
+import type { DocComponent, SurfaceDoc } from '../src/lib/surface-doc';
 import {
   CATALOG_ID,
+  GUARDED_PROP_KEYS,
   ROOT_ID,
   SURFACE_ID,
   componentTree,
   emptyDoc,
+  insertTargetFor,
   insertUsage,
   listContainers,
   nextGen,
   parseRenderMessages,
+  removeComponent,
+  removeComponentProp,
+  setComponentProp,
+  singleSlotParentOf,
   toRenderMessages,
 } from '../src/lib/surface-doc';
 import { welcomeDoc } from '../src/lib/welcome';
@@ -347,6 +353,262 @@ describe('insertUsage', () => {
     insertUsage(doc, MODAL_USAGE);
     expect(doc).toEqual(docBefore);
     expect(MODAL_USAGE).toEqual(usageBefore);
+  });
+});
+
+function docWith(components: DocComponent[]): SurfaceDoc {
+  return { surfaceId: SURFACE_ID, catalogId: CATALOG_ID, components, dataModel: {} };
+}
+
+/** root Column → [Card(child=cardBody Column → [inner Text]), Tabs, plain Text]. */
+function nestedDoc(): SurfaceDoc {
+  return docWith([
+    { id: ROOT_ID, component: 'Column', children: ['card', 'tabs', 'txt'] },
+    { id: 'card', component: 'Card', child: 'cardBody' },
+    { id: 'cardBody', component: 'Column', children: ['inner'] },
+    { id: 'inner', component: 'Text', text: 'inside the card' },
+    {
+      id: 'tabs',
+      component: 'Tabs',
+      tabs: [
+        { title: 'A', child: 'paneA' },
+        { title: 'B', child: 'paneB' },
+      ],
+    },
+    { id: 'paneA', component: 'Text', text: 'pane a' },
+    { id: 'paneB', component: 'Column', children: [] },
+    { id: 'txt', component: 'Text', text: 'top level' },
+  ]);
+}
+
+describe('setComponentProp', () => {
+  it('sets a new prop and overwrites an existing one', () => {
+    const doc = nestedDoc();
+    const withProp = setComponentProp(doc, 'txt', 'variant', 'h2');
+    expect(withProp.components.find((c) => c.id === 'txt')!.variant).toBe('h2');
+    const overwritten = setComponentProp(withProp, 'txt', 'variant', 'body');
+    expect(overwritten.components.find((c) => c.id === 'txt')!.variant).toBe('body');
+  });
+
+  it('accepts arbitrary JSON values and deep-clones them in', () => {
+    const doc = nestedDoc();
+    const value = { style: { color: 'red' }, list: [1, 2] };
+    const next = setComponentProp(doc, 'txt', 'meta', value);
+    value.list.push(3);
+    value.style.color = 'blue';
+    expect(next.components.find((c) => c.id === 'txt')!.meta).toEqual({
+      style: { color: 'red' },
+      list: [1, 2],
+    });
+    // null / false / 0 are all legal values
+    expect(setComponentProp(doc, 'txt', 'x', null).components.find((c) => c.id === 'txt')!.x).toBe(
+      null,
+    );
+    expect(setComponentProp(doc, 'txt', 'x', false).components.find((c) => c.id === 'txt')!.x).toBe(
+      false,
+    );
+  });
+
+  it('throws on unknown ids', () => {
+    expect(() => setComponentProp(nestedDoc(), 'nope', 'text', 'x')).toThrow(/does not exist/);
+  });
+
+  it('throws for every guarded key (id, component, containment)', () => {
+    const doc = nestedDoc();
+    expect([...GUARDED_PROP_KEYS].sort()).toEqual([
+      'child',
+      'children',
+      'component',
+      'content',
+      'id',
+      'tabs',
+      'trigger',
+    ]);
+    for (const key of GUARDED_PROP_KEYS) {
+      expect(() => setComponentProp(doc, 'txt', key, 'x')).toThrow(/cannot be edited directly/);
+    }
+  });
+
+  it('is pure: never mutates the input doc (undo snapshots stay valid)', () => {
+    const doc = nestedDoc();
+    const before = structuredClone(doc);
+    setComponentProp(doc, 'txt', 'variant', 'h1');
+    expect(doc).toEqual(before);
+  });
+});
+
+describe('removeComponentProp', () => {
+  it('removes an existing prop', () => {
+    const doc = setComponentProp(nestedDoc(), 'txt', 'variant', 'h2');
+    const next = removeComponentProp(doc, 'txt', 'variant');
+    expect('variant' in next.components.find((c) => c.id === 'txt')!).toBe(false);
+    // other props untouched
+    expect(next.components.find((c) => c.id === 'txt')!.text).toBe('top level');
+  });
+
+  it('is a no-op for a key the component does not have', () => {
+    const doc = nestedDoc();
+    expect(removeComponentProp(doc, 'txt', 'ghost')).toEqual(doc);
+  });
+
+  it('throws on unknown ids and guarded keys', () => {
+    const doc = nestedDoc();
+    expect(() => removeComponentProp(doc, 'nope', 'text')).toThrow(/does not exist/);
+    for (const key of GUARDED_PROP_KEYS) {
+      expect(() => removeComponentProp(doc, 'card', key)).toThrow(/cannot be edited directly/);
+    }
+  });
+
+  it('is pure: never mutates the input doc', () => {
+    const doc = setComponentProp(nestedDoc(), 'txt', 'variant', 'h2');
+    const before = structuredClone(doc);
+    removeComponentProp(doc, 'txt', 'variant');
+    expect(doc).toEqual(before);
+  });
+});
+
+describe('singleSlotParentOf', () => {
+  it('finds child / trigger / content / tabs[].child slot parents', () => {
+    const modal = insertUsage(emptyDoc(), MODAL_USAGE);
+    expect(singleSlotParentOf(modal, 'demo-btn-g1')).toBe('demo-modal-g1'); // trigger
+    expect(singleSlotParentOf(modal, 'demo-content-g1')).toBe('demo-modal-g1'); // content
+    expect(singleSlotParentOf(modal, 'demo-btn-label-g1')).toBe('demo-btn-g1'); // Button child
+    const doc = nestedDoc();
+    expect(singleSlotParentOf(doc, 'cardBody')).toBe('card'); // Card child
+    expect(singleSlotParentOf(doc, 'paneA')).toBe('tabs'); // tabs[].child
+    expect(singleSlotParentOf(doc, 'paneB')).toBe('tabs');
+  });
+
+  it('returns null for children-array members, root, and unknown ids', () => {
+    const doc = nestedDoc();
+    expect(singleSlotParentOf(doc, 'card')).toBeNull(); // in root's children array
+    expect(singleSlotParentOf(doc, 'txt')).toBeNull();
+    expect(singleSlotParentOf(doc, 'inner')).toBeNull(); // in cardBody's children
+    expect(singleSlotParentOf(doc, ROOT_ID)).toBeNull();
+    expect(singleSlotParentOf(doc, 'nope')).toBeNull();
+  });
+});
+
+describe('removeComponent', () => {
+  it('removes a leaf and splices it out of its parent children array', () => {
+    const doc = nestedDoc();
+    const next = removeComponent(doc, 'txt');
+    expect(next.components.some((c) => c.id === 'txt')).toBe(false);
+    expect(next.components.find((c) => c.id === ROOT_ID)!.children).toEqual(['card', 'tabs']);
+  });
+
+  it('removes the entire subtree, including nested slot references', () => {
+    // Removing the Card takes cardBody (child slot) and inner (grandchild) too.
+    const next = removeComponent(nestedDoc(), 'card');
+    expect(next.components.map((c) => c.id).sort()).toEqual([
+      'paneA',
+      'paneB',
+      ROOT_ID,
+      'tabs',
+      'txt',
+    ]);
+    expect(next.components.find((c) => c.id === ROOT_ID)!.children).toEqual(['tabs', 'txt']);
+  });
+
+  it('removes a Modal subtree through trigger/content references', () => {
+    const doc = insertUsage(emptyDoc(), MODAL_USAGE);
+    // root-g1 is the inserted Column wrapping the whole Modal usage.
+    const next = removeComponent(doc, 'root-g1');
+    expect(next.components.map((c) => c.id)).toEqual([ROOT_ID]);
+    expect(next.components[0]!.children).toEqual([]);
+  });
+
+  it('keeps subtree members still referenced from outside the subtree', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['col1', 'col2'] },
+      { id: 'col1', component: 'Column', children: ['shared', 'only1'] },
+      { id: 'col2', component: 'Column', children: ['shared'] },
+      { id: 'shared', component: 'Text', text: 'shared' },
+      { id: 'only1', component: 'Text', text: 'one' },
+    ]);
+    const next = removeComponent(doc, 'col1');
+    expect(next.components.map((c) => c.id).sort()).toEqual(['col2', ROOT_ID, 'shared']);
+  });
+
+  it('splices duplicate references out everywhere', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['dup', 'other', 'dup'] },
+      { id: 'dup', component: 'Text', text: 'x' },
+      { id: 'other', component: 'Text', text: 'y' },
+    ]);
+    const next = removeComponent(doc, 'dup');
+    expect(next.components.find((c) => c.id === ROOT_ID)!.children).toEqual(['other']);
+    expect(next.components.some((c) => c.id === 'dup')).toBe(false);
+  });
+
+  it('leaves pre-existing orphans alone', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['a'] },
+      { id: 'a', component: 'Text', text: 'a' },
+      { id: 'orphan', component: 'Text', text: 'tolerated JSON paste' },
+    ]);
+    const next = removeComponent(doc, 'a');
+    expect(next.components.map((c) => c.id)).toEqual([ROOT_ID, 'orphan']);
+  });
+
+  it('throws for root and unknown ids', () => {
+    expect(() => removeComponent(nestedDoc(), ROOT_ID)).toThrow(/cannot remove "root"/);
+    expect(() => removeComponent(nestedDoc(), 'nope')).toThrow(/does not exist/);
+  });
+
+  it('refuses single-slot occupants (child/trigger/content/tabs[].child)', () => {
+    const doc = nestedDoc();
+    expect(() => removeComponent(doc, 'cardBody')).toThrow(/single slot of Card "card"/);
+    expect(() => removeComponent(doc, 'paneA')).toThrow(/single slot of Tabs "tabs"/);
+    const modal = insertUsage(emptyDoc(), MODAL_USAGE);
+    expect(() => removeComponent(modal, 'demo-btn-g1')).toThrow(/single slot/);
+    expect(() => removeComponent(modal, 'demo-content-g1')).toThrow(/single slot/);
+    expect(() => removeComponent(modal, 'demo-btn-label-g1')).toThrow(/single slot/);
+    // the error carries the §5 hint
+    expect(() => removeComponent(doc, 'cardBody')).toThrow(/delete the parent/);
+  });
+
+  it('is pure: never mutates the input doc', () => {
+    const doc = nestedDoc();
+    const before = structuredClone(doc);
+    removeComponent(doc, 'card');
+    expect(doc).toEqual(before);
+  });
+});
+
+describe('insertTargetFor', () => {
+  it('is root for null and unknown selections', () => {
+    const doc = nestedDoc();
+    expect(insertTargetFor(doc, null)).toBe(ROOT_ID);
+    expect(insertTargetFor(doc, 'nope')).toBe(ROOT_ID);
+  });
+
+  it('is the selection itself when it is a children-array container', () => {
+    const doc = nestedDoc();
+    expect(insertTargetFor(doc, ROOT_ID)).toBe(ROOT_ID);
+    expect(insertTargetFor(doc, 'cardBody')).toBe('cardBody');
+    expect(insertTargetFor(doc, 'paneB')).toBe('paneB'); // Column inside a Tabs slot
+  });
+
+  it('walks through Card/Modal/Tabs slots to the nearest containing Column', () => {
+    const doc = nestedDoc();
+    expect(insertTargetFor(doc, 'inner')).toBe('cardBody'); // Text → its Column
+    expect(insertTargetFor(doc, 'card')).toBe(ROOT_ID); // Card → root Column
+    expect(insertTargetFor(doc, 'tabs')).toBe(ROOT_ID); // Tabs → root Column
+    expect(insertTargetFor(doc, 'paneA')).toBe(ROOT_ID); // Text in a tab slot → through Tabs
+    expect(insertTargetFor(doc, 'txt')).toBe(ROOT_ID);
+    const modal = insertUsage(emptyDoc(), MODAL_USAGE);
+    // Button label → through Button and Modal to the inserted Column
+    expect(insertTargetFor(modal, 'demo-btn-label-g1')).toBe('root-g1');
+    expect(insertTargetFor(modal, 'demo-content-g1')).toBe('root-g1');
+  });
+
+  it('falls back to root for unreachable non-containers', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: [] },
+      { id: 'orphan', component: 'Text', text: 'x' },
+    ]);
+    expect(insertTargetFor(doc, 'orphan')).toBe(ROOT_ID);
   });
 });
 

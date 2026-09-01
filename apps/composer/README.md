@@ -28,23 +28,34 @@ pnpm --filter @mwe/composer test | typecheck | build
 
 ## Pane tour
 
-- **Glossary** (left, collapsible) — one entry per component from the
-  renderer's `COMPONENT_USAGES` handshake. Drag an entry onto the canvas to
-  insert its canonical usage snippet at the drop position (when the catalog's
-  DnD sidecar is present) or into the selected container (fallback). Clicking
-  an entry inserts into the currently selected container.
-- **Canvas** (center) — toolbar (undo / redo / clear / theme toggle / renderer
-  URL indicator / settings), a slim **layout tree** strip (select any
-  container as the insert target; root is selected by default), and the
-  renderer iframe. The iframe height follows `SURFACE_RESIZE` (min 320px).
-  A transparent drop overlay sits over the iframe only while a glossary drag
-  is in flight; it streams `COMPOSERX_DND_HOVER` coordinates (rAF-throttled)
-  and reads `COMPOSERX_DND_TARGET` replies for precision drops.
-- **Chat** (right) — user/assistant bubbles, a collapsed "Thinking"
-  disclosure per assistant message, stop button. When a reply finishes, the
-  LAST fenced ```json block is parsed as a full `RenderA2uiItem[]` and applied
-  (undo-able); the message gets an "applied" chip, or an inline error chip.
-  Backed by the real Anthropic client below (or the recorded mock).
+- **Glossary** (left, collapsible) — one **visual tile** per component from
+  the renderer's `COMPONENT_USAGES` handshake: a hand-built, theme-aware
+  mini-preview glyph (violet pill for Button, framed card for Card, track +
+  thumb for Slider, …) above the name, with the long description in the
+  tile's tooltip. Unknown component names from BYO catalogs get a generic
+  glyph. Drag a tile onto the canvas — the preview glyph itself is the drag
+  ghost (`setDragImage`) — to insert the component's canonical usage snippet
+  at the drop position (when the catalog's DnD sidecar is present) or into
+  the derived insert target (fallback). Clicking a tile inserts into the
+  derived insert target too (see selection below).
+- **Canvas** (center) — toolbar (undo / redo / clear / theme toggle /
+  **Edit | Preview mode toggle** / renderer URL indicator / settings), a slim
+  **layout tree** strip, and the renderer iframe. Every tree node is
+  clickable and shares the unified selection (containers stay visually
+  distinguished — inserts land in them). The iframe height follows
+  `SURFACE_RESIZE` (min 320px). A transparent drop overlay sits over the
+  iframe only while a glossary drag is in flight; it streams
+  `COMPOSERX_DND_HOVER` coordinates (rAF-throttled) and reads
+  `COMPOSERX_DND_TARGET` replies for precision drops.
+- **Right sidebar** — two tabs, Figma-style:
+  - **Design**: the inspector for the selected component (see below).
+  - **Chat**: user/assistant bubbles, a collapsed "Thinking" disclosure per
+    assistant message, stop button. When a reply finishes, the LAST fenced
+    ```json block is parsed as a full `RenderA2uiItem[]` and applied
+    (undo-able); the message gets an "applied" chip, or an inline error chip.
+    Backed by the real Anthropic client below (or the recorded mock). The
+    chat stays mounted while you're on Design, so the transcript survives
+    tab switches.
 - **Bottom drawer** — tabs:
   - **Layout JSON**: the full `RenderA2uiItem[]` as editable text
     (Apply / Format / Reset, inline parse errors, "modified" badge while your
@@ -57,6 +68,65 @@ pnpm --filter @mwe/composer test | typecheck | build
 Clear-canvas empties the layout to a bare root Column (the welcome layout only
 seeds the very first load).
 
+## Figma-style editing
+
+**Selection.** One selection is shared by canvas clicks, layout-tree clicks,
+and the inspector. In **edit mode** the catalog's sidecar intercepts pointer
+events on the rendered surface and posts `COMPOSERX_SELECT` with the deepest
+hit id; the composer validates it, updates its state, and answers with
+`COMPOSERX_SET_SELECTION`, which the catalog renders as a solid accent
+outline. Clicking the canvas background (or pressing **Escape**) deselects.
+Selecting a component auto-switches the right sidebar to **Design**; manual
+tab clicks stick until the next selection. Whenever a doc change (undo/redo,
+JSON apply, chat apply, clear, delete) removes the selected id, the selection
+clears automatically and the catalog is told.
+
+**Insert target.** Glossary clicks and structural (no-sidecar) drops insert
+into the container derived from the selection: the selected component itself
+if it's a children-array container (Row/Column/List), else its nearest
+container ancestor (walking up through Card/Button/Modal/Tabs slots), else
+root. The glossary tooltips and the drop-overlay hint show the derived
+target.
+
+**Inspector (Design tab).** With nothing selected it shows a hint. With a
+selection it shows the component type + id, a **Delete** button, and a
+widget-per-prop form driven by the catalog's `COMPOSERX_PROP_SPECS`
+(schema-derived): text inputs for strings, number inputs, checkboxes,
+selects for enums, and a small JSON textarea (validated on commit) for
+everything else. `bindable` props have a compact **◈ bind toggle** that
+switches the widget to a `{path}` input (initialized from the current value
+when it already is a binding). Required props carry a `*` marker and cannot
+be removed; optional props present on the instance get a **✕** remove
+affordance. Containment props (`children`/`child`/`trigger`/`content`/
+`tabs`) render read-only — edit those structurally or via the JSON drawer.
+Props on the instance that no spec covers appear in an **Advanced** raw-JSON
+section. Commit semantics: text/number/JSON commit on blur (text/number also
+on Enter; JSON also on Ctrl/Cmd+Enter), selects and checkboxes commit
+immediately — **each commit is exactly one undo step** and re-renders the
+canvas.
+
+**Delete rules.** Delete removes the selected component and its whole
+subtree, splicing it out of the parent's `children` array. It is disabled
+(with a hint) for `root` and for single-slot occupants — a Card/Button
+`child`, Modal `trigger`/`content`, or a Tabs pane — because removing those
+would leave the parent schema-invalid; delete the parent instead, or edit
+via JSON.
+
+**Modes.** The toolbar's **Edit | Preview** control switches the canvas
+between selecting (components inert — a Button won't fire, a TextField won't
+type) and a live preview (actions flow to the event log, no outlines).
+Edit is the default; the mode is not persisted; both mode and selection are
+re-sent to the renderer after every handshake, so they survive a renderer
+reload. In preview the composer also ignores any incoming `COMPOSERX_SELECT`.
+
+**Keyboard shortcuts** (host document, ignored while focus is in an
+input/textarea/select and while the settings modal is open):
+
+| Key                    | Action                                             |
+| ---------------------- | -------------------------------------------------- |
+| `Escape`               | Deselect                                           |
+| `Delete` / `Backspace` | Delete the selection (when the delete rules allow) |
+
 ## BYO renderer
 
 Any bridge-compatible renderer works: set its URL in Settings (persisted, the
@@ -65,11 +135,22 @@ iframe remounts and re-handshakes). The composer loads
 iframe (`allow-scripts allow-same-origin`) and enforces both origin rules of
 contract §2 (event.source must be the iframe, event.origin must match the
 renderer URL's origin; outgoing messages always target that origin, never
-`*`). Renderers without the COMPOSERX sidecar (e.g. the official
-react-basic-catalog sample) still work — drops fall back to the selected
-container, i.e. zero sidecar messages required. If the renderer never sends
-`RENDERER_READY`, the canvas shows an error state after 10s with the URL and
-a retry/settings shortcut.
+`*`). If the renderer never sends `RENDERER_READY`, the canvas shows an
+error state after 10s with the URL and a retry/settings shortcut.
+
+**No-sidecar degradation.** Renderers without the COMPOSERX sidecar (e.g.
+the official react-basic-catalog sample) still work with zero sidecar
+messages — every sidecar feature is independently optional (the composer
+checks the announced `features` array, not the version):
+
+- no `dnd-hittest` → drops fall back to the insert target derived from the
+  selection (shown in the drop hint), instead of pointer-precise placement;
+- no `select` → canvas clicks don't select (the canvas stays a live
+  preview), but tree clicks, the inspector, Escape/Delete, and the mode
+  toggle all keep working — `SET_MODE`/`SET_SELECTION` are still sent and
+  simply ignored by a standard renderer;
+- no `prop-specs` → the inspector falls back to generic JSON rows per prop
+  plus an "add prop" row, so every prop stays editable.
 
 ## Chat: the Anthropic client
 

@@ -9,7 +9,12 @@ import { createComposerStore } from '../src/state/store';
 
 function setup(createClient?: () => LlmClient) {
   const store = createComposerStore();
-  store.attachPort({ sendRender: () => {}, sendTheme: () => {} });
+  store.attachPort({
+    sendRender: () => {},
+    sendTheme: () => {},
+    sendSetMode: () => {},
+    sendSetSelection: () => {},
+  });
   render(
     <StoreProvider store={store}>
       <ChatPanel createClient={createClient} />

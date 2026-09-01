@@ -21,10 +21,59 @@ export const COMPOSERX_SIDECAR_READY = 'COMPOSERX_SIDECAR_READY';
 export const COMPOSERX_DND_HOVER = 'COMPOSERX_DND_HOVER';
 export const COMPOSERX_DND_END = 'COMPOSERX_DND_END';
 export const COMPOSERX_DND_TARGET = 'COMPOSERX_DND_TARGET';
+export const COMPOSERX_SET_MODE = 'COMPOSERX_SET_MODE';
+export const COMPOSERX_SET_SELECTION = 'COMPOSERX_SET_SELECTION';
+export const COMPOSERX_SELECT = 'COMPOSERX_SELECT';
+export const COMPOSERX_PROP_SPECS = 'COMPOSERX_PROP_SPECS';
+
+/** Sidecar feature names (contract §4/§4c/§4d) — check the array, not the version. */
+export const SIDECAR_FEATURE_DND = 'dnd-hittest';
+export const SIDECAR_FEATURE_SELECT = 'select';
+export const SIDECAR_FEATURE_PROP_SPECS = 'prop-specs';
 
 export interface SidecarReadyPayload {
   features: string[];
   version: number;
+}
+
+/**
+ * Tolerant read of SIDECAR_READY features: every feature is independently
+ * optional, so v1 payloads (`['dnd-hittest'], version: 1`) and malformed
+ * payloads both work — non-arrays yield no features, non-string entries are
+ * dropped.
+ */
+export function parseSidecarFeatures(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const features = (payload as { features?: unknown }).features;
+  if (!Array.isArray(features)) return [];
+  return features.filter((f): f is string => typeof f === 'string');
+}
+
+export type ComposerMode = 'edit' | 'preview';
+
+export interface SetModePayload {
+  mode: ComposerMode;
+}
+
+export interface SelectionPayload {
+  /** null = no selection (background click / deselect). */
+  id: string | null;
+}
+
+/** One inspector-form prop derived catalog-side from the zod schemas (§4d). */
+export interface PropSpec {
+  name: string;
+  kind: 'string' | 'number' | 'boolean' | 'enum' | 'json';
+  options?: string[];
+  required?: boolean;
+  bindable?: boolean;
+  containment?: boolean;
+}
+
+export type PropSpecsMap = Record<string, { props: PropSpec[] }>;
+
+export interface PropSpecsPayload {
+  components: PropSpecsMap;
 }
 
 export interface DndHoverPayload {
@@ -58,6 +107,14 @@ export interface BridgeHostCallbacks {
   getTheme(): BridgeTheme;
   /** Current doc serialized as RENDER_A2UI items, read at handshake time. */
   getRenderItems(): RenderA2uiItem[];
+  /**
+   * Current edit/preview mode, read at handshake time so mode survives a
+   * renderer reload (re-sent after RENDER_A2UI). Optional: when absent no
+   * SET_MODE is re-sent and the sidecar's default ('edit') applies.
+   */
+  getMode?(): ComposerMode;
+  /** Current selection, read at handshake time (re-sent after RENDER_A2UI). */
+  getSelection?(): string | null;
   onReady?(): void;
   onCatalog?(payload: CatalogHandshakePayload): void;
   onUsages?(payload: ComponentUsages): void;
@@ -67,6 +124,10 @@ export interface BridgeHostCallbacks {
   onSurfaceResize?(payload: SurfaceResizePayload): void;
   onSidecarReady?(payload: SidecarReadyPayload): void;
   onDndTarget?(payload: DndTargetPayload): void;
+  /** COMPOSERX_SELECT from the sidecar: deepest hit id, or null for background. */
+  onSelect?(payload: SelectionPayload): void;
+  /** COMPOSERX_PROP_SPECS from the sidecar (§4d). */
+  onPropSpecs?(payload: PropSpecsPayload): void;
   /** Anything not recognized above (including FORCE_UNBLOCK) — for the event log. */
   onUnknown?(type: string, payload: unknown): void;
 }
@@ -129,6 +190,16 @@ export class BridgeHost {
 
   sendTheme(theme: BridgeTheme): void {
     this.send({ type: PreviewBridgeMessageType.SET_THEME, payload: { theme } });
+  }
+
+  /** Queued like other non-DND messages until the renderer is ready (§4c). */
+  sendSetMode(payload: SetModePayload): void {
+    this.send({ type: COMPOSERX_SET_MODE, payload });
+  }
+
+  /** Queued like other non-DND messages until the renderer is ready (§4c). */
+  sendSetSelection(payload: SelectionPayload): void {
+    this.send({ type: COMPOSERX_SET_SELECTION, payload });
   }
 
   /** DnD messages are ephemeral: dropped (not queued) until the renderer is ready. */
@@ -195,6 +266,12 @@ export class BridgeHost {
       case COMPOSERX_DND_TARGET:
         this.callbacks.onDndTarget?.(payload as DndTargetPayload);
         break;
+      case COMPOSERX_SELECT:
+        this.callbacks.onSelect?.(payload as SelectionPayload);
+        break;
+      case COMPOSERX_PROP_SPECS:
+        this.callbacks.onPropSpecs?.(payload as PropSpecsPayload);
+        break;
       default:
         this.callbacks.onUnknown?.(type, payload);
         break;
@@ -219,5 +296,16 @@ export class BridgeHost {
       type: PreviewBridgeMessageType.RENDER_A2UI,
       payload: this.callbacks.getRenderItems(),
     });
+    // Mode and selection survive a renderer reload: re-send both after
+    // RENDER_A2UI so the sidecar can re-anchor its outlines (§4c).
+    if (this.callbacks.getMode) {
+      this.post({ type: COMPOSERX_SET_MODE, payload: { mode: this.callbacks.getMode() } });
+    }
+    if (this.callbacks.getSelection) {
+      this.post({
+        type: COMPOSERX_SET_SELECTION,
+        payload: { id: this.callbacks.getSelection() },
+      });
+    }
   }
 }

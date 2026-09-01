@@ -1,5 +1,7 @@
 import { describeComponent } from '../lib/descriptions';
+import { insertTargetFor } from '../lib/surface-doc';
 import { useComposerState, useStore } from '../state/context';
+import { GlossaryPreview } from './glossary-previews';
 
 export const DRAG_MIME = 'application/x-composerx-component';
 
@@ -24,6 +26,28 @@ export function Glossary() {
   }
 
   const names = usages ? Object.keys(usages).sort() : [];
+  // Insert target derives from the unified selection (contract §7): the
+  // selected component if it's a children-array container, else its nearest
+  // container ancestor, else root.
+  const target = insertTargetFor(state.doc, state.selectedComponentId);
+
+  const onDragStart = (e: React.DragEvent<HTMLElement>, name: string) => {
+    e.dataTransfer.setData(DRAG_MIME, name);
+    e.dataTransfer.effectAllowed = 'copy';
+    // The dragged ghost IS the visual: use the tile's preview element.
+    // Guarded — jsdom's DataTransfer has no setDragImage.
+    if (typeof e.dataTransfer.setDragImage === 'function') {
+      const preview = e.currentTarget.querySelector('.gp');
+      if (preview instanceof HTMLElement) {
+        e.dataTransfer.setDragImage(
+          preview,
+          preview.offsetWidth / 2 || 30,
+          preview.offsetHeight / 2 || 20,
+        );
+      }
+    }
+    store.actions.setDragging(true);
+  };
 
   return (
     <aside className="glossary" aria-label="Component glossary">
@@ -44,27 +68,27 @@ export function Glossary() {
           handshake completes.
         </p>
       ) : (
-        <ul className="glossary-list">
+        <ul className="glossary-grid">
           {names.map((name) => (
             <li key={name}>
               <button
-                className="glossary-entry"
+                className="glossary-tile"
+                data-testid={`glossary-tile-${name}`}
                 draggable
-                title={`Drag onto the canvas, or click to insert into ${state.selectedContainerId}`}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData(DRAG_MIME, name);
-                  e.dataTransfer.effectAllowed = 'copy';
-                  store.actions.setDragging(true);
-                }}
+                title={`${describeComponent(name)} Drag onto the canvas, or click to insert into #${target}.`}
+                onDragStart={(e) => onDragStart(e, name)}
                 onDragEnd={() => store.actions.setDragging(false)}
                 onClick={() =>
                   store.actions.insertComponent(name, {
-                    containerId: state.selectedContainerId,
+                    containerId: insertTargetFor(
+                      store.getState().doc,
+                      store.getState().selectedComponentId,
+                    ),
                   })
                 }
               >
+                <GlossaryPreview name={name} />
                 <span className="glossary-name">{name}</span>
-                <span className="glossary-desc">{describeComponent(name)}</span>
               </button>
             </li>
           ))}

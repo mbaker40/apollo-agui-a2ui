@@ -6,7 +6,12 @@ import {
   BridgeHost,
   COMPOSERX_DND_HOVER,
   COMPOSERX_DND_TARGET,
+  COMPOSERX_PROP_SPECS,
+  COMPOSERX_SELECT,
+  COMPOSERX_SET_MODE,
+  COMPOSERX_SET_SELECTION,
   COMPOSERX_SIDECAR_READY,
+  parseSidecarFeatures,
 } from '../src/lib/bridge-host';
 
 const RENDERER_URL = 'http://localhost:7465/';
@@ -31,6 +36,8 @@ interface Harness {
     onSurfaceResize: ReturnType<typeof vi.fn>;
     onSidecarReady: ReturnType<typeof vi.fn>;
     onDndTarget: ReturnType<typeof vi.fn>;
+    onSelect: ReturnType<typeof vi.fn>;
+    onPropSpecs: ReturnType<typeof vi.fn>;
     onUnknown: ReturnType<typeof vi.fn>;
   };
   dispatch(
@@ -66,11 +73,15 @@ function makeHarness(overrides: Partial<BridgeHostCallbacks> = {}): Harness {
     onSurfaceResize: vi.fn(),
     onSidecarReady: vi.fn(),
     onDndTarget: vi.fn(),
+    onSelect: vi.fn(),
+    onPropSpecs: vi.fn(),
     onUnknown: vi.fn(),
   };
   const host = new BridgeHost({
     getTheme: () => 'dark',
     getRenderItems: () => renderItems,
+    getMode: () => 'edit',
+    getSelection: () => 'sel-1',
     ...callbacks,
     ...overrides,
   });
@@ -168,11 +179,61 @@ describe('BridgeHost buffering and handshake', () => {
       PreviewBridgeMessageType.GET_COMPONENT_USAGES,
       PreviewBridgeMessageType.RENDER_A2UI, // flushed queue entry
       PreviewBridgeMessageType.SET_THEME, // flushed queue entry
-      PreviewBridgeMessageType.RENDER_A2UI, // current doc, last
+      PreviewBridgeMessageType.RENDER_A2UI, // current doc
+      COMPOSERX_SET_MODE, // mode survives a renderer reload (§4c)
+      COMPOSERX_SET_SELECTION, // so does the selection
     ]);
     expect(h.sent[0]!.message.payload).toEqual({ theme: 'dark' });
-    expect(h.sent.at(-1)!.message.payload).toBe(renderItems);
+    expect(h.sent[5]!.message.payload).toBe(renderItems);
+    expect(h.sent[6]!.message.payload).toEqual({ mode: 'edit' });
+    expect(h.sent[7]!.message.payload).toEqual({ id: 'sel-1' });
     expect(h.callbacks.onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-sends mode and selection after RENDER_A2UI on every re-handshake', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.sent.length = 0;
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY); // renderer reloaded
+    const types = h.sent.map((s) => s.message.type);
+    const renderIdx = types.indexOf(PreviewBridgeMessageType.RENDER_A2UI);
+    expect(renderIdx).toBeGreaterThanOrEqual(0);
+    expect(types.slice(renderIdx + 1)).toEqual([COMPOSERX_SET_MODE, COMPOSERX_SET_SELECTION]);
+  });
+
+  it('skips the mode/selection re-send when the getters are not provided', () => {
+    const h = makeHarness({ getMode: undefined, getSelection: undefined });
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    const types = h.sent.map((s) => s.message.type);
+    expect(types).not.toContain(COMPOSERX_SET_MODE);
+    expect(types).not.toContain(COMPOSERX_SET_SELECTION);
+  });
+
+  it('queues sendSetMode / sendSetSelection until ready, then sends immediately', () => {
+    const h = makeHarness();
+    h.host.sendSetMode({ mode: 'preview' });
+    h.host.sendSetSelection({ id: 'abc' });
+    expect(h.sent).toHaveLength(0); // queued, not dropped (unlike DnD)
+
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    const queued = h.sent.filter(
+      (s) => s.message.type === COMPOSERX_SET_MODE || s.message.type === COMPOSERX_SET_SELECTION,
+    );
+    // the two queued messages flush, then the post-render re-send appends two more
+    expect(queued.map((s) => s.message.payload)).toEqual([
+      { mode: 'preview' },
+      { id: 'abc' },
+      { mode: 'edit' },
+      { id: 'sel-1' },
+    ]);
+
+    h.sent.length = 0;
+    h.host.sendSetSelection({ id: null });
+    h.host.sendSetMode({ mode: 'edit' });
+    expect(h.sent.map((s) => s.message)).toEqual([
+      { type: COMPOSERX_SET_SELECTION, payload: { id: null } },
+      { type: COMPOSERX_SET_MODE, payload: { mode: 'edit' } },
+    ]);
   });
 
   it('posts every outgoing message with the renderer origin, never *', () => {
@@ -192,7 +253,9 @@ describe('BridgeHost buffering and handshake', () => {
     h.host.sendDndHover({ x: 1, y: 2 });
     h.host.sendDndEnd();
     h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
-    const preReadyDnd = h.sent.filter((s) => s.message.type.startsWith('COMPOSERX_'));
+    const preReadyDnd = h.sent.filter(
+      (s) => s.message.type === COMPOSERX_DND_HOVER || s.message.type === 'COMPOSERX_DND_END',
+    );
     expect(preReadyDnd).toHaveLength(0);
     h.host.sendDndHover({ x: 5, y: 6 });
     expect(h.sent.at(-1)!.message).toEqual({
@@ -222,6 +285,11 @@ describe('BridgeHost message routing', () => {
       slot: 'into',
       rect: null,
     });
+    h.dispatch(COMPOSERX_SELECT, { id: 'clicked-component' });
+    h.dispatch(COMPOSERX_SELECT, { id: null });
+    h.dispatch(COMPOSERX_PROP_SPECS, {
+      components: { Text: { props: [{ name: 'text', kind: 'string' }] } },
+    });
     h.dispatch('SOME_FUTURE_TYPE', { x: 1 });
 
     expect(h.callbacks.onCatalog).toHaveBeenCalledWith({ title: 'Basic Catalog' });
@@ -239,7 +307,13 @@ describe('BridgeHost message routing', () => {
     expect(h.callbacks.onDndTarget).toHaveBeenCalledWith(
       expect.objectContaining({ containerId: 'root', index: 0, slot: 'into' }),
     );
+    expect(h.callbacks.onSelect).toHaveBeenNthCalledWith(1, { id: 'clicked-component' });
+    expect(h.callbacks.onSelect).toHaveBeenNthCalledWith(2, { id: null });
+    expect(h.callbacks.onPropSpecs).toHaveBeenCalledWith({
+      components: { Text: { props: [{ name: 'text', kind: 'string' }] } },
+    });
     expect(h.callbacks.onUnknown).toHaveBeenCalledWith('SOME_FUTURE_TYPE', { x: 1 });
+    expect(h.callbacks.onUnknown).not.toHaveBeenCalledWith(COMPOSERX_SELECT, expect.anything());
   });
 
   it('ignores malformed message data', () => {
@@ -270,7 +344,33 @@ describe('BridgeHost message routing', () => {
     const first = h.sent.length;
     h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
     expect(h.sent.length).toBeGreaterThan(first);
-    expect(h.sent.at(-1)!.message.type).toBe(PreviewBridgeMessageType.RENDER_A2UI);
+    const reHandshake = h.sent.slice(first).map((s) => s.message.type);
+    expect(reHandshake).toContain(PreviewBridgeMessageType.RENDER_A2UI);
+    // the doc render still precedes the mode/selection re-send
+    expect(reHandshake.at(-3)).toBe(PreviewBridgeMessageType.RENDER_A2UI);
+  });
+});
+
+describe('parseSidecarFeatures', () => {
+  it('parses the v2 feature array', () => {
+    expect(
+      parseSidecarFeatures({ features: ['dnd-hittest', 'select', 'prop-specs'], version: 2 }),
+    ).toEqual(['dnd-hittest', 'select', 'prop-specs']);
+  });
+
+  it('still works with v1 payloads (dnd-hittest only)', () => {
+    expect(parseSidecarFeatures({ features: ['dnd-hittest'], version: 1 })).toEqual([
+      'dnd-hittest',
+    ]);
+  });
+
+  it('treats malformed payloads as featureless', () => {
+    expect(parseSidecarFeatures(undefined)).toEqual([]);
+    expect(parseSidecarFeatures(null)).toEqual([]);
+    expect(parseSidecarFeatures('x')).toEqual([]);
+    expect(parseSidecarFeatures({})).toEqual([]);
+    expect(parseSidecarFeatures({ features: 'dnd-hittest' })).toEqual([]);
+    expect(parseSidecarFeatures({ features: [1, 'select', null] })).toEqual(['select']);
   });
 });
 

@@ -11,7 +11,14 @@ import type {
   SendToServerPayload,
 } from 'a2ui-bridge/messages';
 import type { ComponentUsages } from 'a2ui-bridge/render-config';
-import type { SidecarReadyPayload } from '../lib/bridge-host';
+import type {
+  ComposerMode,
+  PropSpecsMap,
+  PropSpecsPayload,
+  SelectionPayload,
+  SidecarReadyPayload,
+} from '../lib/bridge-host';
+import { parseSidecarFeatures } from '../lib/bridge-host';
 import type { Theme } from '../lib/settings';
 import {
   DEFAULT_MODEL,
@@ -24,10 +31,12 @@ import {
 } from '../lib/settings';
 import type { InsertTarget, SurfaceDoc } from '../lib/surface-doc';
 import {
-  ROOT_ID,
   emptyDoc,
   insertUsage,
   parseRenderMessages,
+  removeComponent,
+  removeComponentProp,
+  setComponentProp,
   toRenderMessages,
 } from '../lib/surface-doc';
 import { welcomeDoc } from '../lib/welcome';
@@ -50,6 +59,8 @@ export interface EventEntry {
 export interface RenderPort {
   sendRender(items: RenderA2uiItem[]): void;
   sendTheme(theme: Theme): void;
+  sendSetMode(payload: { mode: ComposerMode }): void;
+  sendSetSelection(payload: { id: string | null }): void;
 }
 
 export interface ComposerSettings {
@@ -66,16 +77,24 @@ export interface HandshakeState {
   catalogError: string | null;
   usages: ComponentUsages | null;
   sidecar: boolean;
+  /** Parsed SIDECAR_READY features — each one independently optional (§4). */
+  sidecarFeatures: string[];
 }
 
 export type DrawerTab = 'json' | 'data' | 'events';
+export type RightTab = 'design' | 'chat';
 
 export interface ComposerState {
   doc: SurfaceDoc;
   docRevision: number;
   undoStack: SurfaceDoc[];
   redoStack: SurfaceDoc[];
-  selectedContainerId: string;
+  /** Unified Figma-style selection shared by canvas, tree, and inspector. */
+  selectedComponentId: string | null;
+  /** Edit (canvas clicks select) vs preview (live components). Not persisted. */
+  mode: ComposerMode;
+  /** Per-component prop specs from COMPOSERX_PROP_SPECS; null until arrived. */
+  propSpecs: PropSpecsMap | null;
   handshake: HandshakeState;
   /** Latest full DATA_MODEL_CHANGE snapshot from the renderer, if any. */
   rendererDataModel: Record<string, unknown> | null;
@@ -84,6 +103,8 @@ export interface ComposerState {
   glossaryOpen: boolean;
   drawerOpen: boolean;
   drawerTab: DrawerTab;
+  /** Which right-sidebar tab is shown; selection auto-switches to 'design'. */
+  rightTab: RightTab;
   settingsOpen: boolean;
   /** True while a glossary entry is being dragged (activates the drop overlay). */
   dragging: boolean;
@@ -99,6 +120,7 @@ function initialHandshake(): HandshakeState {
     catalogError: null,
     usages: null,
     sidecar: false,
+    sidecarFeatures: [],
   };
 }
 
@@ -116,6 +138,10 @@ function safeJson(value: unknown): string {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export interface ComposerStoreOptions {
@@ -139,6 +165,8 @@ export interface ComposerActions {
   bridgeAction(payload: SendToServerPayload): void;
   bridgeConsole(payload: ConsoleLogPayload): void;
   bridgeSidecarReady(payload: SidecarReadyPayload): void;
+  bridgeSelect(payload: SelectionPayload): void;
+  bridgePropSpecs(payload: PropSpecsPayload): void;
   bridgeUnknown(type: string, payload: unknown): void;
   handshakeReset(): void;
   handshakeTimedOut(): void;
@@ -149,12 +177,18 @@ export interface ComposerActions {
   clearCanvas(): void;
   undo(): void;
   redo(): void;
+  commitProp(id: string, key: string, value: unknown): ActionResult;
+  removeProp(id: string, key: string): ActionResult;
+  deleteSelected(): ActionResult;
+  // selection + mode
+  selectComponent(id: string | null): void;
+  setMode(mode: ComposerMode): void;
   // ui
-  selectContainer(id: string): void;
   setDragging(dragging: boolean): void;
   toggleGlossary(): void;
   setDrawerOpen(open: boolean): void;
   setDrawerTab(tab: DrawerTab): void;
+  setRightTab(tab: RightTab): void;
   setSettingsOpen(open: boolean): void;
   // settings
   setTheme(theme: Theme): void;
@@ -173,7 +207,9 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     docRevision: 0,
     undoStack: [],
     redoStack: [],
-    selectedContainerId: ROOT_ID,
+    selectedComponentId: null,
+    mode: 'edit',
+    propSpecs: null,
     handshake: initialHandshake(),
     rendererDataModel: null,
     events: [],
@@ -187,6 +223,7 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     glossaryOpen: true,
     drawerOpen: true,
     drawerTab: 'json',
+    rightTab: 'design',
     settingsOpen: false,
     dragging: false,
   };
@@ -216,35 +253,49 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     port?.sendRender(toRenderMessages(doc));
   }
 
+  /**
+   * Selection survives a doc change only while its id still exists; a stale
+   * id clears to null (and the catalog is told, so its outline goes away).
+   * Returns the state patch; the SET_SELECTION side effect runs in the caller
+   * after set() so the renderer sees selection changes in order.
+   */
+  function reconcileSelection(doc: SurfaceDoc): {
+    patch: Partial<ComposerState>;
+    cleared: boolean;
+  } {
+    const id = state.selectedComponentId;
+    if (id === null || doc.components.some((c) => c.id === id)) {
+      return { patch: {}, cleared: false };
+    }
+    return { patch: { selectedComponentId: null }, cleared: true };
+  }
+
   /** Applies a mutated doc: snapshot for undo, clear redo, re-send RENDER_A2UI. */
   function applyDoc(doc: SurfaceDoc, label: string): void {
     const undoStack = [...state.undoStack, structuredClone(state.doc)];
     while (undoStack.length > UNDO_LIMIT) undoStack.shift();
-    const selectedContainerId = doc.components.some((c) => c.id === state.selectedContainerId)
-      ? state.selectedContainerId
-      : ROOT_ID;
+    const selection = reconcileSelection(doc);
     set({
       doc,
       docRevision: state.docRevision + 1,
       undoStack,
       redoStack: [],
-      selectedContainerId,
+      ...selection.patch,
       ...pushEvent(
         'lifecycle',
         `RENDER_A2UI sent — ${label} (${doc.components.length} components)`,
       ),
     });
     sendRender(doc);
+    if (selection.cleared) port?.sendSetSelection({ id: null });
   }
 
   function restoreDoc(doc: SurfaceDoc, patch: Partial<ComposerState>, label: string): void {
-    const selectedContainerId = doc.components.some((c) => c.id === state.selectedContainerId)
-      ? state.selectedContainerId
-      : ROOT_ID;
+    const selection = reconcileSelection(doc);
     set({
       doc,
       docRevision: state.docRevision + 1,
-      selectedContainerId,
+      ...selection.patch,
       ...patch,
       ...pushEvent(
         'lifecycle',
@@ -252,6 +303,7 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       ),
     });
     sendRender(doc);
+    if (selection.cleared) port?.sendSetSelection({ id: null });
   }
 
   const actions: ComposerActions = {
@@ -304,10 +356,37 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       set(pushEvent('console', truncate(message), payload?.stack, level));
     },
     bridgeSidecarReady(payload) {
-      const features = Array.isArray(payload?.features) ? payload.features.join(', ') : '';
+      const sidecarFeatures = parseSidecarFeatures(payload);
       set({
-        handshake: { ...state.handshake, sidecar: true },
-        ...pushEvent('lifecycle', `COMPOSERX sidecar ready (${features || 'no features'})`),
+        handshake: { ...state.handshake, sidecar: true, sidecarFeatures },
+        ...pushEvent(
+          'lifecycle',
+          `COMPOSERX sidecar ready (${sidecarFeatures.join(', ') || 'no features'})`,
+        ),
+      });
+    },
+    bridgeSelect(payload) {
+      // Belt over the catalog's suspenders: in preview mode canvas clicks
+      // are live component interactions, never selection (§4c).
+      if (state.mode === 'preview') return;
+      const id = payload && typeof payload === 'object' ? payload.id : null;
+      actions.selectComponent(typeof id === 'string' ? id : null);
+    },
+    bridgePropSpecs(payload) {
+      const components =
+        payload && typeof payload === 'object' && isRecordValue(payload.components)
+          ? (payload.components as PropSpecsMap)
+          : null;
+      if (!components) {
+        set(pushEvent('error', 'COMPOSERX_PROP_SPECS payload malformed — ignored'));
+        return;
+      }
+      set({
+        propSpecs: components,
+        ...pushEvent(
+          'lifecycle',
+          `COMPOSERX_PROP_SPECS received (${Object.keys(components).length} components)`,
+        ),
       });
     },
     bridgeUnknown(type, payload) {
@@ -317,6 +396,9 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       set({
         handshake: initialHandshake(),
         rendererDataModel: null,
+        // A different renderer may not speak prop-specs; stale specs from the
+        // previous renderer must not drive the inspector.
+        propSpecs: null,
         ...pushEvent('lifecycle', 'Renderer iframe mounted — waiting for RENDERER_READY'),
       });
     },
@@ -393,9 +475,61 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
         'redo',
       );
     },
+    commitProp(id, key, value) {
+      try {
+        const doc = setComponentProp(state.doc, id, key, value);
+        applyDoc(doc, `set ${id}.${key}`);
+        return { ok: true };
+      } catch (err) {
+        const error = errorMessage(err);
+        log('error', `Set prop ${id}.${key} failed: ${error}`);
+        return { ok: false, error };
+      }
+    },
+    removeProp(id, key) {
+      try {
+        const doc = removeComponentProp(state.doc, id, key);
+        applyDoc(doc, `remove ${id}.${key}`);
+        return { ok: true };
+      } catch (err) {
+        const error = errorMessage(err);
+        log('error', `Remove prop ${id}.${key} failed: ${error}`);
+        return { ok: false, error };
+      }
+    },
+    deleteSelected() {
+      const id = state.selectedComponentId;
+      if (id === null) {
+        return { ok: false, error: 'nothing selected' };
+      }
+      try {
+        const doc = removeComponent(state.doc, id);
+        applyDoc(doc, `remove ${id}`);
+        return { ok: true };
+      } catch (err) {
+        const error = errorMessage(err);
+        log('error', `Remove ${id} failed: ${error}`);
+        return { ok: false, error };
+      }
+    },
 
-    selectContainer(id) {
-      set({ selectedContainerId: id });
+    selectComponent(id) {
+      if (id !== null && !state.doc.components.some((c) => c.id === id)) {
+        return; // stale id (race with a re-render) — keep the current selection
+      }
+      // Selecting a component brings the Design inspector forward; manual tab
+      // clicks stick until the next selection. Deselecting leaves the tab.
+      const patch: Partial<ComposerState> =
+        id !== null
+          ? { selectedComponentId: id, rightTab: 'design' }
+          : { selectedComponentId: null };
+      set(patch);
+      port?.sendSetSelection({ id });
+    },
+    setMode(mode) {
+      if (state.mode === mode) return;
+      set({ mode, ...pushEvent('lifecycle', `Mode set to ${mode} (COMPOSERX_SET_MODE)`) });
+      port?.sendSetMode({ mode });
     },
     setDragging(dragging) {
       if (state.dragging !== dragging) set({ dragging });
@@ -408,6 +542,9 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
     },
     setDrawerTab(tab) {
       set({ drawerTab: tab, drawerOpen: true });
+    },
+    setRightTab(tab) {
+      set({ rightTab: tab });
     },
     setSettingsOpen(open) {
       set({ settingsOpen: open });

@@ -43,6 +43,7 @@ import {
   emptyDoc,
   insertTargetFor,
   insertUsage,
+  movableUnitOf,
   moveComponent,
   moveComponents,
   parseRenderMessages,
@@ -550,12 +551,14 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
         return;
       }
       if (payload.additive === true) {
-        // Additive select (§4f: shift-click / long-press): toggle the id in
-        // or out of the list — NEVER cycle — and reset the repeat-tap seed:
-        // a toggle breaks the tap rhythm, so the next PLAIN tap on the same
-        // spot must be a fresh deepest select, not an ancestor hop.
+        // Additive select (§4f: shift-click / long-press): toggle the MOVABLE
+        // UNIT of the id — the §4e lift-anchor rule, so pressing a Button's
+        // label toggles the Button and the built selection is always
+        // group-movable/-deletable — NEVER cycle — and reset the repeat-tap
+        // seed: a toggle breaks the tap rhythm, so the next PLAIN tap on the
+        // same spot must be a fresh deepest select, not an ancestor hop.
         lastCanvasHitId = null;
-        actions.toggleSelected(id);
+        actions.toggleSelected(movableUnitOf(state.doc, id));
         return;
       }
       // Repeat-tap ancestor cycling (contract §7 ancestor honing): the

@@ -401,9 +401,17 @@ never a candidate. Order: document order (flat-list order).
 
 **Composer semantics**: selection state is `selectedComponentIds:
 string[]` (ordered, deduped; primary = first). `additive` SELECT toggles
-the id in/out of the list; plain SELECT replaces the list with `[id]`
-(the §7 repeat-tap ancestor cycling applies ONLY to plain single
-selects). MARQUEE replaces the list. Escape and background click clear
+the **movable unit** of the id in/out of the list — the nearest
+self-or-ancestor whose parent reference is a children-array splice (the
+§4e lift-anchor rule: the id itself when already so parented, the
+component itself again when nothing above qualifies, e.g. root). A
+long-press or shift-click on a Button's label therefore toggles the
+Button, so additive-built selections are always group-movable and
+group-deletable; plain SELECT still posts the raw deepest id (reaching
+slot occupants stays possible via §7 cycling / the breadcrumb / the
+tree). Plain SELECT replaces the list with `[id]` (the §7 repeat-tap
+ancestor cycling applies ONLY to plain single selects). MARQUEE replaces
+the list. Escape and background click clear
 the whole list. Doc changes filter out stale ids. Every selection change
 re-sends SET_SELECTION with `{id: primary, ids}`.
 

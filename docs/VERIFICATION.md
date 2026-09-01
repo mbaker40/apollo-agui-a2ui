@@ -249,3 +249,30 @@ mobile layout; canvas tap-select opening the Design view; all inputs at
 - Known interplay: on mobile, plain-tap auto-opens the Design view, so
   repeat-tap cycling is effectively a desktop affordance — the breadcrumb
   (which the tap lands on) is the mobile honing tool by design.
+
+### Group move addendum (drag a selection member, the whole selection moves)
+
+- Units: catalog 121 vitest tests (group-lift decision from the stored
+  SET_SELECTION ids incl. snapshot-at-lift and singleton/non-member
+  fallbacks, union subtree exclusion in resolveDropTarget, count ghost
+  label, per-member origin dims, unchanged MOVE_CANCEL/long-press timing,
+  SIDECAR_READY v5), composer 363 (moveComponents document-order
+  contiguous insertion / subsumption / skipped / clamp / refusal matrix,
+  canMoveGroupTo, partitionForMove, non-collapsing MOVE_START, group
+  MOVE_DROP = one undo + skipped toast, groupMoveIndexFor tree math,
+  member vs non-member tree drags, movableUnitOf additive-select
+  anchoring).
+- Live drive, 12 checks (desktop + phone emulation): a marquee pair then a
+  member press-drag showed the "2 components" ghost with BOTH origins
+  dimmed and dropped both as one contiguous document-order run before the
+  card title — ONE undo restored both; a non-member press single-lifted
+  ("Text", one dim) and collapsed the selection, Escape cancelled cleanly;
+  a tree drag on a selected row group-moved the whole pair into
+  welcome-body (one undo); on mobile two long-presses built the pair and
+  an immediate member drag moved BOTH buttons into the card. Screenshots:
+  composer-group-move.png, composer-mobile-group-move.png.
+- Contract delta found by the mobile drive: additive selects (long-press /
+  shift-click) now toggle the MOVABLE UNIT (§4e lift-anchor rule — a
+  Button's label toggles the Button), because a selection of slot-bound
+  labels could neither group-move nor group-delete; plain-tap cycling,
+  the breadcrumb, and the tree still reach slot occupants for prop edits.

@@ -13,6 +13,7 @@ import {
   insertTargetFor,
   insertUsage,
   listContainers,
+  movableUnitOf,
   moveComponent,
   moveComponents,
   nextGen,
@@ -493,6 +494,30 @@ describe('singleSlotParentOf', () => {
     expect(singleSlotParentOf(doc, 'inner')).toBeNull(); // in cardBody's children
     expect(singleSlotParentOf(doc, ROOT_ID)).toBeNull();
     expect(singleSlotParentOf(doc, 'nope')).toBeNull();
+  });
+});
+
+describe('movableUnitOf (contract §4f additive selects)', () => {
+  it('climbs slot references to the nearest children-array-parented ancestor', () => {
+    const doc = nestedDoc();
+    expect(movableUnitOf(doc, 'cardBody')).toBe('card'); // Card child slot
+    expect(movableUnitOf(doc, 'paneA')).toBe('tabs'); // tabs[].child
+    expect(movableUnitOf(doc, 'paneB')).toBe('tabs');
+  });
+
+  it('climbs MULTIPLE slot levels: a Button label inside a Modal trigger resolves to the Modal', () => {
+    const modal = insertUsage(emptyDoc(), MODAL_USAGE);
+    expect(movableUnitOf(modal, 'demo-btn-label-g1')).toBe('demo-modal-g1'); // label -> Button -> Modal
+    expect(movableUnitOf(modal, 'demo-btn-g1')).toBe('demo-modal-g1'); // trigger -> Modal
+    expect(movableUnitOf(modal, 'demo-content-g1')).toBe('demo-modal-g1'); // content -> Modal
+  });
+
+  it('is the identity for children-array members, root, and unknown ids', () => {
+    const doc = nestedDoc();
+    expect(movableUnitOf(doc, 'card')).toBe('card');
+    expect(movableUnitOf(doc, 'inner')).toBe('inner');
+    expect(movableUnitOf(doc, ROOT_ID)).toBe(ROOT_ID);
+    expect(movableUnitOf(doc, 'nope')).toBe('nope');
   });
 });
 

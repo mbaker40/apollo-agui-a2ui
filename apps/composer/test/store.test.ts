@@ -842,17 +842,33 @@ describe('multi-select (contract §4f)', () => {
     ]);
   });
 
-  it('bridgeSelect with additive toggles — it never cycles', () => {
+  it('bridgeSelect with additive toggles the MOVABLE UNIT — it never cycles', () => {
     const { store } = makeStore();
+    // §4f: a long-press / shift-click on the Button's label toggles the
+    // BUTTON (its movable unit), so the built selection can group-move.
     store.actions.bridgeSelect({ id: 'welcome-cta-label', additive: true });
-    expect(ids(store)).toEqual(['welcome-cta-label']);
-    // A second additive tap on the SAME id removes it — a plain repeat tap
-    // would have cycled to the ancestor instead.
+    expect(ids(store)).toEqual(['welcome-cta']);
+    // A second additive tap on the SAME spot removes the unit — a plain
+    // repeat tap would have cycled to the ancestor instead.
     store.actions.bridgeSelect({ id: 'welcome-cta-label', additive: true });
     expect(ids(store)).toEqual([]);
+    // Children-array members are their own unit.
     store.actions.bridgeSelect({ id: 'welcome-title', additive: true });
     store.actions.bridgeSelect({ id: 'welcome-text', additive: true });
     expect(ids(store)).toEqual(['welcome-title', 'welcome-text']);
+  });
+
+  it('additive selects build a group-movable pair through slot occupants', () => {
+    const { store } = makeStore();
+    // Pressing the Card's slot-bound interior (welcome-body) toggles the
+    // Card; pressing the Button's label toggles the Button — the exact §4e
+    // lift-anchor rule, so a member drag group-lifts this selection.
+    store.actions.bridgeSelect({ id: 'welcome-body', additive: true });
+    store.actions.bridgeSelect({ id: 'welcome-cta-label', additive: true });
+    expect(ids(store)).toEqual(['welcome-card', 'welcome-cta']);
+    // Toggling via the unit itself removes the same entry.
+    store.actions.bridgeSelect({ id: 'welcome-card', additive: true });
+    expect(ids(store)).toEqual(['welcome-cta']);
   });
 
   it('a multi-selection makes the next plain tap a fresh select (no cycling)', () => {

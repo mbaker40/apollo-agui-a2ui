@@ -475,6 +475,26 @@ export function singleSlotParentOf(doc: SurfaceDoc, id: string): string | null {
   return null;
 }
 
+/**
+ * The movable unit of `id` (contract §4f): the nearest self-or-ancestor whose
+ * parent reference is a children-array splice — the §4e lift-anchor rule. A
+ * Button's label resolves to the Button, a Card's slot-bound interior to the
+ * Card; an id that is already children-array-parented (or has no qualifying
+ * ancestor, e.g. root) resolves to itself. Additive selects toggle THIS id,
+ * so long-press / shift-click selections are always group-movable and
+ * group-deletable.
+ */
+export function movableUnitOf(doc: SurfaceDoc, id: string): string {
+  let current = id;
+  const seen = new Set<string>([current]);
+  for (;;) {
+    const slotParent = singleSlotParentOf(doc, current);
+    if (slotParent === null || seen.has(slotParent)) return current;
+    seen.add(slotParent);
+    current = slotParent;
+  }
+}
+
 /** Ids reachable from `startId` (inclusive) via reference edges — see unreachableIds. */
 function reachableFrom(components: DocComponent[], startId: string): Set<string> {
   const known = new Set(components.map((c) => c.id));

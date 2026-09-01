@@ -313,6 +313,148 @@ describe('deleteSelected', () => {
   });
 });
 
+describe('moveComponentTo', () => {
+  // welcome doc: root Column [welcome-card(Card → welcome-body Column
+  // [welcome-title, welcome-text, welcome-cta])]
+  function bodyChildren(store: ReturnType<typeof makeStore>['store']) {
+    return store.getState().doc.components.find((c) => c.id === 'welcome-body')!.children;
+  }
+
+  it('applies a valid move as ONE undo snapshot + re-render + event-log entry', () => {
+    const { store, sentRenders } = makeStore();
+    // reorder within welcome-body: title (index 0) to the end (after-removal index 2)
+    const result = store.actions.moveComponentTo('welcome-title', 'welcome-body', 2);
+    expect(result.ok).toBe(true);
+    expect(bodyChildren(store)).toEqual(['welcome-text', 'welcome-cta', 'welcome-title']);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(sentRenders).toHaveLength(1);
+    expect(store.getState().events.some((e) => e.summary.includes('move welcome-title'))).toBe(
+      true,
+    );
+    store.actions.undo();
+    expect(bodyChildren(store)).toEqual(['welcome-title', 'welcome-text', 'welcome-cta']);
+  });
+
+  it('moves across containers, subtree intact', () => {
+    const { store } = makeStore();
+    const result = store.actions.moveComponentTo('welcome-cta', 'root', 0);
+    expect(result.ok).toBe(true);
+    const doc = store.getState().doc;
+    expect(doc.components.find((c) => c.id === 'root')!.children).toEqual([
+      'welcome-cta',
+      'welcome-card',
+    ]);
+    expect(bodyChildren(store)).toEqual(['welcome-title', 'welcome-text']);
+    // the Button kept its label child — no remap, subtree traveled
+    expect(doc.components.find((c) => c.id === 'welcome-cta')!.child).toBe('welcome-cta-label');
+  });
+
+  it('surfaces canMoveTo refusals without throwing: doc unchanged, reason logged', () => {
+    const { store, sentRenders } = makeStore();
+    const before = store.getState().doc;
+    const slot = store.actions.moveComponentTo('welcome-body', 'root', 0);
+    expect(slot.ok).toBe(false);
+    if (!slot.ok) expect(slot.error).toMatch(/single slot/);
+    const subtree = store.actions.moveComponentTo('welcome-card', 'welcome-body', 0);
+    expect(subtree.ok).toBe(false);
+    if (!subtree.ok) expect(subtree.error).toMatch(/own subtree/);
+    const unknown = store.actions.moveComponentTo('ghost', 'root', 0);
+    expect(unknown.ok).toBe(false);
+    expect(store.getState().doc).toBe(before);
+    expect(store.getState().undoStack).toHaveLength(0);
+    expect(sentRenders).toHaveLength(0);
+    expect(
+      store.getState().events.filter((e) => e.kind === 'error' && /refused/.test(e.summary)),
+    ).toHaveLength(3);
+  });
+
+  it('same-position moves are no-ops: no undo snapshot, no re-render', () => {
+    const { store, sentRenders } = makeStore();
+    const result = store.actions.moveComponentTo('welcome-title', 'welcome-body', 0);
+    expect(result.ok).toBe(true);
+    expect(bodyChildren(store)).toEqual(['welcome-title', 'welcome-text', 'welcome-cta']);
+    expect(store.getState().undoStack).toHaveLength(0);
+    expect(sentRenders).toHaveLength(0);
+  });
+});
+
+describe('bridge MOVE_* flows (§4e)', () => {
+  it('MOVE_START selects the lifted component and logs', () => {
+    const { store, sentSelections } = makeStore();
+    store.actions.bridgeMoveStart({ id: 'welcome-card' });
+    expect(store.getState().selectedComponentId).toBe('welcome-card');
+    expect(sentSelections).toEqual(['welcome-card']);
+    expect(store.getState().events.some((e) => e.summary.includes('COMPOSERX_MOVE_START'))).toBe(
+      true,
+    );
+  });
+
+  it('MOVE_DROP applies through moveComponentTo (one undo step)', () => {
+    const { store, sentRenders } = makeStore();
+    store.actions.bridgeMoveDrop({
+      id: 'welcome-title',
+      containerId: 'welcome-body',
+      index: 2,
+      slot: 'after',
+    });
+    expect(store.getState().doc.components.find((c) => c.id === 'welcome-body')!.children).toEqual([
+      'welcome-text',
+      'welcome-cta',
+      'welcome-title',
+    ]);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(sentRenders).toHaveLength(1);
+  });
+
+  it('an invalid MOVE_DROP logs the canMoveTo reason and leaves the doc unchanged', () => {
+    const { store, sentRenders } = makeStore();
+    const before = store.getState().doc;
+    store.actions.bridgeMoveDrop({
+      id: 'welcome-card',
+      containerId: 'welcome-body', // inside its own subtree
+      index: 0,
+      slot: 'into',
+    });
+    expect(store.getState().doc).toBe(before);
+    expect(store.getState().undoStack).toHaveLength(0);
+    expect(sentRenders).toHaveLength(0);
+    const err = store.getState().events.find((e) => e.kind === 'error');
+    expect(err?.summary).toMatch(/own subtree/);
+  });
+
+  it('MOVE_CANCEL only logs', () => {
+    const { store, sentRenders } = makeStore();
+    const before = store.getState().doc;
+    store.actions.bridgeMoveCancel({ id: 'welcome-card' });
+    expect(store.getState().doc).toBe(before);
+    expect(sentRenders).toHaveLength(0);
+    expect(store.getState().selectedComponentId).toBeNull();
+    expect(store.getState().events.some((e) => e.summary.includes('COMPOSERX_MOVE_CANCEL'))).toBe(
+      true,
+    );
+  });
+
+  it('ignores all MOVE_* messages in preview mode (belt over suspenders)', () => {
+    const { store, sentRenders, sentSelections } = makeStore();
+    store.actions.setMode('preview');
+    const before = store.getState().doc;
+    const eventsBefore = store.getState().events.length;
+    store.actions.bridgeMoveStart({ id: 'welcome-card' });
+    store.actions.bridgeMoveDrop({
+      id: 'welcome-title',
+      containerId: 'welcome-body',
+      index: 2,
+      slot: 'after',
+    });
+    store.actions.bridgeMoveCancel({ id: 'welcome-card' });
+    expect(store.getState().doc).toBe(before);
+    expect(store.getState().selectedComponentId).toBeNull();
+    expect(sentSelections).toEqual([]);
+    expect(sentRenders).toHaveLength(0);
+    expect(store.getState().events.length).toBe(eventsBefore);
+  });
+});
+
 describe('sidecar v2 payloads', () => {
   it('parses SIDECAR_READY features (v2 and v1)', () => {
     const { store } = makeStore();

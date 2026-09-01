@@ -5,11 +5,13 @@ import {
   GUARDED_PROP_KEYS,
   ROOT_ID,
   SURFACE_ID,
+  canMoveTo,
   componentTree,
   emptyDoc,
   insertTargetFor,
   insertUsage,
   listContainers,
+  moveComponent,
   nextGen,
   parseRenderMessages,
   removeComponent,
@@ -573,6 +575,189 @@ describe('removeComponent', () => {
     const before = structuredClone(doc);
     removeComponent(doc, 'card');
     expect(doc).toEqual(before);
+  });
+});
+
+/** root Column → [a, b, c] (three Text leaves) for reorder tests. */
+function reorderDoc(): SurfaceDoc {
+  return docWith([
+    { id: ROOT_ID, component: 'Column', children: ['a', 'b', 'c'] },
+    { id: 'a', component: 'Text', text: 'a' },
+    { id: 'b', component: 'Text', text: 'b' },
+    { id: 'c', component: 'Text', text: 'c' },
+  ]);
+}
+
+describe('moveComponent', () => {
+  it('same-container reorder downward: index is interpreted AFTER removal', () => {
+    // Moving [a,b,c]'s 'a' to after 'c': the after-removal children are
+    // [b,c], so index 2 — NOT 3 — lands it at the end (no off-by-one).
+    const doc = moveComponent(reorderDoc(), 'a', ROOT_ID, 2);
+    expect(comp(doc, ROOT_ID).children).toEqual(['b', 'c', 'a']);
+  });
+
+  it('same-container reorder upward and to middle positions', () => {
+    expect(comp(moveComponent(reorderDoc(), 'c', ROOT_ID, 0), ROOT_ID).children).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
+    expect(comp(moveComponent(reorderDoc(), 'c', ROOT_ID, 1), ROOT_ID).children).toEqual([
+      'a',
+      'c',
+      'b',
+    ]);
+    expect(comp(moveComponent(reorderDoc(), 'a', ROOT_ID, 1), ROOT_ID).children).toEqual([
+      'b',
+      'a',
+      'c',
+    ]);
+  });
+
+  it('same-position moves leave the order unchanged', () => {
+    expect(comp(moveComponent(reorderDoc(), 'b', ROOT_ID, 1), ROOT_ID).children).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
+  });
+
+  it('clamps out-of-range and non-finite indices', () => {
+    expect(comp(moveComponent(reorderDoc(), 'a', ROOT_ID, 99), ROOT_ID).children).toEqual([
+      'b',
+      'c',
+      'a',
+    ]);
+    expect(comp(moveComponent(reorderDoc(), 'c', ROOT_ID, -7), ROOT_ID).children).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
+    expect(comp(moveComponent(reorderDoc(), 'a', ROOT_ID, Number.NaN), ROOT_ID).children).toEqual([
+      'b',
+      'c',
+      'a',
+    ]);
+  });
+
+  it('cross-container move re-homes the whole subtree intact: no remap, dataModel untouched', () => {
+    const doc = nestedDoc();
+    doc.dataModel = { keep: true };
+    // card (Card → cardBody Column → inner Text) into paneB (Column in a Tabs slot)
+    const moved = moveComponent(doc, 'card', 'paneB', 0);
+    expect(comp(moved, ROOT_ID).children).toEqual(['tabs', 'txt']);
+    expect(comp(moved, 'paneB').children).toEqual(['card']);
+    // subtree traveled intact — same ids, same membership, no remapping
+    expect(moved.components.map((c) => c.id).sort()).toEqual(
+      doc.components.map((c) => c.id).sort(),
+    );
+    expect(comp(moved, 'card').child).toBe('cardBody');
+    expect(comp(moved, 'cardBody').children).toEqual(['inner']);
+    expect(moved.dataModel).toBe(doc.dataModel);
+  });
+
+  it('moves into a container that has no children property yet', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['row', 'x'] },
+      { id: 'row', component: 'Row' },
+      { id: 'x', component: 'Text', text: 'x' },
+    ]);
+    const moved = moveComponent(doc, 'x', 'row', 5);
+    expect(comp(moved, ROOT_ID).children).toEqual(['row']);
+    expect(comp(moved, 'row').children).toEqual(['x']);
+  });
+
+  it('splices duplicate listings out everywhere and inserts exactly once', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['x', 'y', 'x'] },
+      { id: 'x', component: 'Text', text: 'x' },
+      { id: 'y', component: 'Column', children: [] },
+    ]);
+    const moved = moveComponent(doc, 'x', 'y', 0);
+    expect(comp(moved, ROOT_ID).children).toEqual(['y']);
+    expect(comp(moved, 'y').children).toEqual(['x']);
+  });
+
+  it('re-homes tolerated orphans back into the tree', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: [] },
+      { id: 'stray', component: 'Text', text: 'found' },
+    ]);
+    expect(comp(moveComponent(doc, 'stray', ROOT_ID, 0), ROOT_ID).children).toEqual(['stray']);
+  });
+
+  it('throws for root, unknown ids, unknown targets, and non-container targets', () => {
+    const doc = nestedDoc();
+    expect(() => moveComponent(doc, ROOT_ID, 'cardBody', 0)).toThrow(/cannot move "root"/);
+    expect(() => moveComponent(doc, 'nope', 'cardBody', 0)).toThrow(/"nope" does not exist/);
+    expect(() => moveComponent(doc, 'txt', 'gone', 0)).toThrow(/"gone" does not exist/);
+    expect(() => moveComponent(doc, 'txt', 'card', 0)).toThrow(/is a Card, not a container/);
+    expect(() => moveComponent(doc, 'txt', 'inner', 0)).toThrow(/not a container/);
+  });
+
+  it('refuses single-slot occupants (child / tabs[].child), like the remove op', () => {
+    const doc = nestedDoc();
+    expect(() => moveComponent(doc, 'cardBody', ROOT_ID, 0)).toThrow(/single slot of Card "card"/);
+    expect(() => moveComponent(doc, 'paneA', ROOT_ID, 0)).toThrow(/single slot of Tabs "tabs"/);
+  });
+
+  it('refuses moving into itself or anywhere inside its own subtree', () => {
+    const doc = nestedDoc();
+    // cardBody is reached from card through the Card child slot
+    expect(() => moveComponent(doc, 'card', 'cardBody', 0)).toThrow(/own subtree.*cardBody/);
+    const col = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['col'] },
+      { id: 'col', component: 'Column', children: [] },
+    ]);
+    expect(() => moveComponent(col, 'col', 'col', 0)).toThrow(/into itself/);
+  });
+
+  it('refuses a target container whose children is not an array', () => {
+    const doc = docWith([
+      { id: ROOT_ID, component: 'Column', children: ['bad', 'x'] },
+      { id: 'bad', component: 'Row', children: 'oops' },
+      { id: 'x', component: 'Text', text: 'x' },
+    ]);
+    expect(() => moveComponent(doc, 'x', 'bad', 0)).toThrow(/non-array "children"/);
+  });
+
+  it('is pure: never mutates the input doc', () => {
+    const doc = nestedDoc();
+    const before = structuredClone(doc);
+    moveComponent(doc, 'txt', 'cardBody', 0);
+    expect(doc).toEqual(before);
+  });
+});
+
+describe('canMoveTo', () => {
+  it('returns ok for legal moves', () => {
+    const doc = nestedDoc();
+    expect(canMoveTo(doc, 'card', 'paneB')).toEqual({ ok: true });
+    expect(canMoveTo(doc, 'txt', 'cardBody')).toEqual({ ok: true });
+    expect(canMoveTo(doc, 'inner', ROOT_ID)).toEqual({ ok: true });
+    // a same-container "reorder" is a legal move too
+    expect(canMoveTo(doc, 'txt', ROOT_ID)).toEqual({ ok: true });
+  });
+
+  it('mirrors every moveComponent refusal as {ok:false, reason} with the same message', () => {
+    const doc = nestedDoc();
+    const cases: [string, string, RegExp][] = [
+      [ROOT_ID, 'cardBody', /cannot move "root"/],
+      ['nope', ROOT_ID, /does not exist/],
+      ['txt', 'gone', /does not exist/],
+      ['txt', 'card', /not a container/],
+      ['cardBody', ROOT_ID, /single slot/],
+      ['paneA', ROOT_ID, /single slot/],
+      ['card', 'cardBody', /own subtree/],
+    ];
+    for (const [id, containerId, pattern] of cases) {
+      const verdict = canMoveTo(doc, id, containerId);
+      expect(verdict.ok).toBe(false);
+      if (verdict.ok) continue;
+      expect(verdict.reason).toMatch(pattern);
+      // the throwing op uses the exact same message (toThrow substring match)
+      expect(() => moveComponent(doc, id, containerId, 0)).toThrow(verdict.reason);
+    }
   });
 });
 

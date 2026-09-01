@@ -42,7 +42,10 @@ pnpm --filter @mwe/composer test | typecheck | build
   **Edit | Preview mode toggle** / renderer URL indicator / settings), a slim
   **layout tree** strip, and the renderer iframe. Every tree node is
   clickable and shares the unified selection (containers stay visually
-  distinguished — inserts land in them). The iframe height follows
+  distinguished — inserts land in them), and every non-root node can be
+  dragged to rearrange the layout (see "Moving placed components" below);
+  tree rows also take glossary-tile drops as positioned inserts. The iframe
+  height follows
   `SURFACE_RESIZE` (min 320px). A transparent drop overlay sits over the
   iframe only while a glossary drag is in flight; it streams
   `COMPOSERX_DND_HOVER` coordinates (rAF-throttled) and reads
@@ -112,6 +115,39 @@ subtree, splicing it out of the parent's `children` array. It is disabled
 would leave the parent schema-invalid; delete the parent instead, or edit
 via JSON.
 
+**Moving placed components.** Two drag surfaces sit over the same pure
+`moveComponent` op (contract §5): the moved component travels with its whole
+subtree, ids are never remapped, the data model is untouched, and **every
+applied move is exactly one undo step**.
+
+- **Canvas move** (edit mode, requires the sidecar's `'move'` feature):
+  press-and-drag a rendered component; the catalog lifts it (ghost + dimmed
+  origin + dashed drop indicators) and the composer receives
+  `COMPOSERX_MOVE_START` (selects the component + logs),
+  `COMPOSERX_MOVE_DROP` (validated via `canMoveTo`, then applied — the
+  payload's `index` is the position **after** the moved id is removed), or
+  `COMPOSERX_MOVE_CANCEL` (log only). The composer stays authoritative: an
+  invalid drop logs the refusal reason and changes nothing, and all `MOVE_*`
+  messages are ignored outright in preview mode.
+- **Layout-tree drag** (works with ANY renderer, sidecar or not): every
+  non-root tree row is draggable. Hovering a row resolves by thirds of its
+  rect — upper third → before it in its parent, lower third → after, middle
+  third → into it (children-array container rows only; leaf middles behave
+  as before/after by half). Indicators reuse the dashed language: a dashed
+  accent insertion line between rows, a dashed outline on an 'into' row.
+  Targets `canMoveTo` rejects render as no-drop (dimmed, not-allowed cursor,
+  `dropEffect: 'none'`) and refuse the drop. Tree rows also accept
+  **glossary-tile drags** with the same position resolution, inserting the
+  usage snippet at that exact spot.
+
+**Validity rules** (shared by both surfaces via `canMoveTo`): the target must
+be a children-array container (Row/Column/List — never a Card/Button/Modal/
+Tabs slot); `root` cannot be moved; single-slot occupants (a Card/Button
+`child`, Modal `trigger`/`content`, Tabs panes) cannot be moved on their own
+(move the parent instead); and a component can never be moved into itself or
+anywhere inside its own subtree. Same-position drops are no-ops (no undo
+snapshot); out-of-range indices clamp.
+
 **Modes.** The toolbar's **Edit | Preview** control switches the canvas
 between selecting (components inert — a Button won't fire, a TextField won't
 type) and a live preview (actions flow to the event log, no outlines).
@@ -150,7 +186,9 @@ checks the announced `features` array, not the version):
   toggle all keep working — `SET_MODE`/`SET_SELECTION` are still sent and
   simply ignored by a standard renderer;
 - no `prop-specs` → the inspector falls back to generic JSON rows per prop
-  plus an "add prop" row, so every prop stays editable.
+  plus an "add prop" row, so every prop stays editable;
+- no `move` → no canvas press-and-drag moves, but drag-to-rearrange in the
+  layout tree keeps working (it never needs the sidecar).
 
 ## Chat: the Anthropic client
 

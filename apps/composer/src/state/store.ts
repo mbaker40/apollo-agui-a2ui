@@ -13,6 +13,8 @@ import type {
 import type { ComponentUsages } from 'a2ui-bridge/render-config';
 import type {
   ComposerMode,
+  MoveDropPayload,
+  MoveIdPayload,
   PropSpecsMap,
   PropSpecsPayload,
   SelectionPayload,
@@ -31,8 +33,10 @@ import {
 } from '../lib/settings';
 import type { InsertTarget, SurfaceDoc } from '../lib/surface-doc';
 import {
+  canMoveTo,
   emptyDoc,
   insertUsage,
+  moveComponent,
   parseRenderMessages,
   removeComponent,
   removeComponentProp,
@@ -167,6 +171,9 @@ export interface ComposerActions {
   bridgeSidecarReady(payload: SidecarReadyPayload): void;
   bridgeSelect(payload: SelectionPayload): void;
   bridgePropSpecs(payload: PropSpecsPayload): void;
+  bridgeMoveStart(payload: MoveIdPayload): void;
+  bridgeMoveDrop(payload: MoveDropPayload): void;
+  bridgeMoveCancel(payload: MoveIdPayload): void;
   bridgeUnknown(type: string, payload: unknown): void;
   handshakeReset(): void;
   handshakeTimedOut(): void;
@@ -180,6 +187,8 @@ export interface ComposerActions {
   commitProp(id: string, key: string, value: unknown): ActionResult;
   removeProp(id: string, key: string): ActionResult;
   deleteSelected(): ActionResult;
+  /** Re-homes `id` into `containerId` at `index` (AFTER-removal semantics, §5). */
+  moveComponentTo(id: string, containerId: string, index: number): ActionResult;
   // selection + mode
   selectComponent(id: string | null): void;
   setMode(mode: ComposerMode): void;
@@ -389,6 +398,25 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
         ),
       });
     },
+    // MOVE_* messages (§4e) are edit-mode gestures; in preview mode they are
+    // ignored entirely — belt over the catalog's suspenders, which should not
+    // start moves in preview mode in the first place.
+    bridgeMoveStart(payload) {
+      if (state.mode === 'preview') return;
+      log('lifecycle', `COMPOSERX_MOVE_START — lifting "${payload.id}"`);
+      actions.selectComponent(payload.id);
+    },
+    bridgeMoveDrop(payload) {
+      if (state.mode === 'preview') return;
+      // moveComponentTo validates via canMoveTo: an invalid drop logs the
+      // refusal reason and leaves the doc unchanged (§4e — the composer is
+      // authoritative, the catalog mutates nothing itself).
+      actions.moveComponentTo(payload.id, payload.containerId, payload.index);
+    },
+    bridgeMoveCancel(payload) {
+      if (state.mode === 'preview') return;
+      log('lifecycle', `COMPOSERX_MOVE_CANCEL — move of "${payload.id}" abandoned`);
+    },
     bridgeUnknown(type, payload) {
       set(pushEvent('unknown', `Unhandled message: ${type}`, truncate(safeJson(payload))));
     },
@@ -519,6 +547,31 @@ export function createComposerStore(options: ComposerStoreOptions = {}): Compose
       } catch (err) {
         const error = errorMessage(err);
         log('error', `Remove ${id} failed: ${error}`);
+        return { ok: false, error };
+      }
+    },
+
+    moveComponentTo(id, containerId, index) {
+      // canMoveTo is the shared validity gate (§5): refusals surface as a
+      // logged reason + ActionResult error, never a throw — invalid drops
+      // (own subtree, single-slot occupants, non-containers) change nothing.
+      const verdict = canMoveTo(state.doc, id, containerId);
+      if (!verdict.ok) {
+        log('error', `Move ${id} refused: ${verdict.reason}`);
+        return { ok: false, error: verdict.reason };
+      }
+      try {
+        const doc = moveComponent(state.doc, id, containerId, index);
+        // Same-position drops (the commitProp unchanged-value precedent):
+        // nothing changed, so no undo snapshot and no re-render.
+        if (JSON.stringify(doc.components) === JSON.stringify(state.doc.components)) {
+          return { ok: true };
+        }
+        applyDoc(doc, `move ${id} → ${containerId}[${index}]`);
+        return { ok: true };
+      } catch (err) {
+        const error = errorMessage(err);
+        log('error', `Move ${id} failed: ${error}`);
         return { ok: false, error };
       }
     },

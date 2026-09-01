@@ -6,11 +6,16 @@ import {
   BridgeHost,
   COMPOSERX_DND_HOVER,
   COMPOSERX_DND_TARGET,
+  COMPOSERX_MOVE_CANCEL,
+  COMPOSERX_MOVE_DROP,
+  COMPOSERX_MOVE_START,
   COMPOSERX_PROP_SPECS,
   COMPOSERX_SELECT,
   COMPOSERX_SET_MODE,
   COMPOSERX_SET_SELECTION,
   COMPOSERX_SIDECAR_READY,
+  parseMoveDropPayload,
+  parseMoveIdPayload,
   parseSidecarFeatures,
 } from '../src/lib/bridge-host';
 
@@ -38,6 +43,9 @@ interface Harness {
     onDndTarget: ReturnType<typeof vi.fn>;
     onSelect: ReturnType<typeof vi.fn>;
     onPropSpecs: ReturnType<typeof vi.fn>;
+    onMoveStart: ReturnType<typeof vi.fn>;
+    onMoveDrop: ReturnType<typeof vi.fn>;
+    onMoveCancel: ReturnType<typeof vi.fn>;
     onUnknown: ReturnType<typeof vi.fn>;
   };
   dispatch(
@@ -75,6 +83,9 @@ function makeHarness(overrides: Partial<BridgeHostCallbacks> = {}): Harness {
     onDndTarget: vi.fn(),
     onSelect: vi.fn(),
     onPropSpecs: vi.fn(),
+    onMoveStart: vi.fn(),
+    onMoveDrop: vi.fn(),
+    onMoveCancel: vi.fn(),
     onUnknown: vi.fn(),
   };
   const host = new BridgeHost({
@@ -348,6 +359,90 @@ describe('BridgeHost message routing', () => {
     expect(reHandshake).toContain(PreviewBridgeMessageType.RENDER_A2UI);
     // the doc render still precedes the mode/selection re-send
     expect(reHandshake.at(-3)).toBe(PreviewBridgeMessageType.RENDER_A2UI);
+  });
+});
+
+describe('BridgeHost MOVE_* routing (§4e)', () => {
+  it('routes MOVE_START / MOVE_DROP / MOVE_CANCEL to the move callbacks', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.dispatch(COMPOSERX_MOVE_START, { id: 'welcome-card' });
+    h.dispatch(COMPOSERX_MOVE_DROP, {
+      id: 'welcome-card',
+      containerId: 'root',
+      index: 1,
+      slot: 'after',
+    });
+    h.dispatch(COMPOSERX_MOVE_CANCEL, { id: 'welcome-card' });
+
+    expect(h.callbacks.onMoveStart).toHaveBeenCalledWith({ id: 'welcome-card' });
+    expect(h.callbacks.onMoveDrop).toHaveBeenCalledWith({
+      id: 'welcome-card',
+      containerId: 'root',
+      index: 1,
+      slot: 'after',
+    });
+    expect(h.callbacks.onMoveCancel).toHaveBeenCalledWith({ id: 'welcome-card' });
+    expect(h.callbacks.onUnknown).not.toHaveBeenCalled();
+  });
+
+  it('index 0 and slot into/before survive the shape check', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.dispatch(COMPOSERX_MOVE_DROP, { id: 'a', containerId: 'b', index: 0, slot: 'into' });
+    h.dispatch(COMPOSERX_MOVE_DROP, { id: 'a', containerId: 'b', index: 2, slot: 'before' });
+    expect(h.callbacks.onMoveDrop).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops malformed MOVE_* payloads without invoking callbacks (or onUnknown)', () => {
+    const h = makeHarness();
+    h.dispatch(PreviewBridgeMessageType.RENDERER_READY);
+    h.dispatch(COMPOSERX_MOVE_START); // no payload
+    h.dispatch(COMPOSERX_MOVE_START, { id: 42 });
+    h.dispatch(COMPOSERX_MOVE_START, { id: '' });
+    h.dispatch(COMPOSERX_MOVE_START, 'welcome-card');
+    h.dispatch(COMPOSERX_MOVE_CANCEL, {});
+    h.dispatch(COMPOSERX_MOVE_CANCEL, { id: null });
+    h.dispatch(COMPOSERX_MOVE_DROP, { id: 'a', containerId: 'b', slot: 'after' }); // no index
+    h.dispatch(COMPOSERX_MOVE_DROP, { id: 'a', containerId: 'b', index: '1', slot: 'after' });
+    h.dispatch(COMPOSERX_MOVE_DROP, { id: 'a', containerId: 'b', index: Number.NaN, slot: 'into' });
+    h.dispatch(COMPOSERX_MOVE_DROP, { id: 'a', containerId: 'b', index: 1, slot: 'inside' });
+    h.dispatch(COMPOSERX_MOVE_DROP, { id: 'a', index: 1, slot: 'after' }); // no containerId
+    h.dispatch(COMPOSERX_MOVE_DROP, null);
+
+    expect(h.callbacks.onMoveStart).not.toHaveBeenCalled();
+    expect(h.callbacks.onMoveDrop).not.toHaveBeenCalled();
+    expect(h.callbacks.onMoveCancel).not.toHaveBeenCalled();
+    expect(h.callbacks.onUnknown).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseMoveIdPayload / parseMoveDropPayload', () => {
+  it('accepts well-formed payloads', () => {
+    expect(parseMoveIdPayload({ id: 'x' })).toEqual({ id: 'x' });
+    expect(parseMoveDropPayload({ id: 'x', containerId: 'y', index: 3, slot: 'before' })).toEqual({
+      id: 'x',
+      containerId: 'y',
+      index: 3,
+      slot: 'before',
+    });
+  });
+
+  it('strips extra fields from MOVE_DROP payloads', () => {
+    expect(
+      parseMoveDropPayload({ id: 'x', containerId: 'y', index: 0, slot: 'into', extra: true }),
+    ).toEqual({ id: 'x', containerId: 'y', index: 0, slot: 'into' });
+  });
+
+  it('rejects malformed payloads with null', () => {
+    expect(parseMoveIdPayload(undefined)).toBeNull();
+    expect(parseMoveIdPayload('x')).toBeNull();
+    expect(parseMoveIdPayload({ id: '' })).toBeNull();
+    expect(parseMoveDropPayload({ id: 'x', containerId: '', index: 0, slot: 'into' })).toBeNull();
+    expect(
+      parseMoveDropPayload({ id: 'x', containerId: 'y', index: Infinity, slot: 'into' }),
+    ).toBeNull();
+    expect(parseMoveDropPayload({ id: 'x', containerId: 'y', index: 0, slot: null })).toBeNull();
   });
 });
 

@@ -68,6 +68,9 @@ export function CanvasPane() {
       },
       onSelect: (payload) => store.actions.bridgeSelect(payload),
       onPropSpecs: (payload) => store.actions.bridgePropSpecs(payload),
+      onMoveStart: (payload) => store.actions.bridgeMoveStart(payload),
+      onMoveDrop: (payload) => store.actions.bridgeMoveDrop(payload),
+      onMoveCancel: (payload) => store.actions.bridgeMoveCancel(payload),
       onUnknown: (type, payload) => store.actions.bridgeUnknown(type, payload),
     });
     host.register(iframe, rendererUrl);

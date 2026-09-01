@@ -648,6 +648,46 @@ button:focus-visible {
   opacity: 0.8;
 }
 
+/* Tree drag-to-rearrange (contract §7) — the dashed indicator language:
+   dashed accent insertion line between rows, dashed outline on an 'into'
+   row, no-drop styling for targets canMoveTo rejects. */
+.tree-drop-indicator {
+  height: 0;
+  margin: -1px 10px -1px 6px;
+  border-top: 2px dashed var(--accent);
+  border-radius: 2px;
+  position: relative;
+  pointer-events: none;
+}
+.tree-drop-indicator::before,
+.tree-drop-indicator::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.tree-drop-indicator::before {
+  left: -3px;
+}
+.tree-drop-indicator::after {
+  right: -3px;
+}
+.tree-node.drop-into {
+  outline: 2px dashed var(--accent);
+  outline-offset: 1px;
+  background: var(--accent-soft);
+}
+.tree-row.no-drop {
+  cursor: not-allowed;
+}
+.tree-row.no-drop .tree-node {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .canvas-scroll {
   flex: 1;
   overflow: auto;

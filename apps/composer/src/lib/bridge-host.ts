@@ -25,11 +25,15 @@ export const COMPOSERX_SET_MODE = 'COMPOSERX_SET_MODE';
 export const COMPOSERX_SET_SELECTION = 'COMPOSERX_SET_SELECTION';
 export const COMPOSERX_SELECT = 'COMPOSERX_SELECT';
 export const COMPOSERX_PROP_SPECS = 'COMPOSERX_PROP_SPECS';
+export const COMPOSERX_MOVE_START = 'COMPOSERX_MOVE_START';
+export const COMPOSERX_MOVE_DROP = 'COMPOSERX_MOVE_DROP';
+export const COMPOSERX_MOVE_CANCEL = 'COMPOSERX_MOVE_CANCEL';
 
-/** Sidecar feature names (contract §4/§4c/§4d) — check the array, not the version. */
+/** Sidecar feature names (contract §4/§4c/§4d/§4e) — check the array, not the version. */
 export const SIDECAR_FEATURE_DND = 'dnd-hittest';
 export const SIDECAR_FEATURE_SELECT = 'select';
 export const SIDECAR_FEATURE_PROP_SPECS = 'prop-specs';
+export const SIDECAR_FEATURE_MOVE = 'move';
 
 export interface SidecarReadyPayload {
   features: string[];
@@ -74,6 +78,42 @@ export type PropSpecsMap = Record<string, { props: PropSpec[] }>;
 
 export interface PropSpecsPayload {
   components: PropSpecsMap;
+}
+
+/** COMPOSERX_MOVE_START / COMPOSERX_MOVE_CANCEL: the lifted component (§4e). */
+export interface MoveIdPayload {
+  id: string;
+}
+
+/**
+ * COMPOSERX_MOVE_DROP (§4e): where the catalog wants the component re-homed.
+ * `index` is the position in `containerId`'s children AFTER the moved id is
+ * removed (contract §5). The composer stays authoritative and validates via
+ * canMoveTo before applying.
+ */
+export interface MoveDropPayload {
+  id: string;
+  containerId: string;
+  index: number;
+  slot: 'before' | 'after' | 'into';
+}
+
+/** Shape check for MOVE_START/MOVE_CANCEL payloads; null = malformed, drop it. */
+export function parseMoveIdPayload(payload: unknown): MoveIdPayload | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const id = (payload as { id?: unknown }).id;
+  return typeof id === 'string' && id.length > 0 ? { id } : null;
+}
+
+/** Shape check for MOVE_DROP payloads; null = malformed, drop it. */
+export function parseMoveDropPayload(payload: unknown): MoveDropPayload | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const { id, containerId, index, slot } = payload as Record<string, unknown>;
+  if (typeof id !== 'string' || id.length === 0) return null;
+  if (typeof containerId !== 'string' || containerId.length === 0) return null;
+  if (typeof index !== 'number' || !Number.isFinite(index)) return null;
+  if (slot !== 'before' && slot !== 'after' && slot !== 'into') return null;
+  return { id, containerId, index, slot };
 }
 
 export interface DndHoverPayload {
@@ -128,6 +168,12 @@ export interface BridgeHostCallbacks {
   onSelect?(payload: SelectionPayload): void;
   /** COMPOSERX_PROP_SPECS from the sidecar (§4d). */
   onPropSpecs?(payload: PropSpecsPayload): void;
+  /** COMPOSERX_MOVE_START (§4e): a canvas move gesture lifted this component. */
+  onMoveStart?(payload: MoveIdPayload): void;
+  /** COMPOSERX_MOVE_DROP (§4e): the catalog proposes a re-home; validate then apply. */
+  onMoveDrop?(payload: MoveDropPayload): void;
+  /** COMPOSERX_MOVE_CANCEL (§4e): the gesture ended without a drop. */
+  onMoveCancel?(payload: MoveIdPayload): void;
   /** Anything not recognized above (including FORCE_UNBLOCK) — for the event log. */
   onUnknown?(type: string, payload: unknown): void;
 }
@@ -272,6 +318,23 @@ export class BridgeHost {
       case COMPOSERX_PROP_SPECS:
         this.callbacks.onPropSpecs?.(payload as PropSpecsPayload);
         break;
+      // MOVE_* payloads drive document mutations, so unlike the display-only
+      // messages above they are shape-checked here; malformed ones are dropped.
+      case COMPOSERX_MOVE_START: {
+        const start = parseMoveIdPayload(payload);
+        if (start) this.callbacks.onMoveStart?.(start);
+        break;
+      }
+      case COMPOSERX_MOVE_DROP: {
+        const drop = parseMoveDropPayload(payload);
+        if (drop) this.callbacks.onMoveDrop?.(drop);
+        break;
+      }
+      case COMPOSERX_MOVE_CANCEL: {
+        const cancel = parseMoveIdPayload(payload);
+        if (cancel) this.callbacks.onMoveCancel?.(cancel);
+        break;
+      }
       default:
         this.callbacks.onUnknown?.(type, payload);
         break;

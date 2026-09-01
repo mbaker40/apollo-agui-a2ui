@@ -475,14 +475,15 @@ export function singleSlotParentOf(doc: SurfaceDoc, id: string): string | null {
   return null;
 }
 
-function reachableIds(components: DocComponent[]): Set<string> {
+/** Ids reachable from `startId` (inclusive) via reference edges — see unreachableIds. */
+function reachableFrom(components: DocComponent[], startId: string): Set<string> {
   const known = new Set(components.map((c) => c.id));
   const byId = new Map<string, DocComponent>();
   for (const c of components) {
     if (!byId.has(c.id)) byId.set(c.id, c);
   }
   const reachable = new Set<string>();
-  const queue: string[] = [ROOT_ID];
+  const queue: string[] = [startId];
   while (queue.length > 0) {
     const id = queue.pop();
     if (id === undefined || reachable.has(id)) continue;
@@ -499,6 +500,10 @@ function reachableIds(components: DocComponent[]): Set<string> {
     }
   }
   return reachable;
+}
+
+function reachableIds(components: DocComponent[]): Set<string> {
+  return reachableFrom(components, ROOT_ID);
 }
 
 /**
@@ -535,6 +540,103 @@ export function removeComponent(doc: SurfaceDoc, id: string): SurfaceDoc {
     if (!reachableAfter.has(reachable)) dropped.add(reachable);
   }
   const components = spliced.filter((c) => !dropped.has(c.id));
+  return { ...doc, components };
+}
+
+export type MoveVerdict = { ok: true } | { ok: false; reason: string };
+
+/**
+ * The shared validity checks behind canMoveTo and moveComponent (contract §5).
+ * Returns a human-readable refusal reason, or null when the move is legal.
+ */
+function moveRefusalReason(doc: SurfaceDoc, id: string, containerId: string): string | null {
+  if (id === ROOT_ID) {
+    return `cannot move "${ROOT_ID}" — the surface root cannot be re-homed`;
+  }
+  const moved = doc.components.find((c) => c.id === id);
+  if (!moved) {
+    return `component "${id}" does not exist in the document`;
+  }
+  const container = doc.components.find((c) => c.id === containerId);
+  if (!container) {
+    return `move target "${containerId}" does not exist in the document`;
+  }
+  if (!CONTAINER_COMPONENTS.has(container.component)) {
+    return (
+      `move target "${containerId}" is a ${container.component}, not a container ` +
+      `(${[...CONTAINER_COMPONENTS].join(', ')})`
+    );
+  }
+  if (container.children !== undefined && !Array.isArray(container.children)) {
+    return `move target "${containerId}" has a non-array "children" property`;
+  }
+  const slotParent = singleSlotParentOf(doc, id);
+  if (slotParent !== null) {
+    const parent = doc.components.find((c) => c.id === slotParent);
+    return (
+      `cannot move "${id}": it fills a single slot of ${parent?.component ?? 'component'} ` +
+      `"${slotParent}" — move the parent instead, or edit via JSON`
+    );
+  }
+  if (containerId === id) {
+    return `cannot move "${id}" into itself`;
+  }
+  if (reachableFrom(doc.components, id).has(containerId)) {
+    return `cannot move "${id}" into its own subtree ("${containerId}" is inside it)`;
+  }
+  return null;
+}
+
+/**
+ * Whether `id` may be re-homed into `containerId` (contract §5): the same
+ * checks as moveComponent, exposed as a verdict so drag surfaces can render
+ * no-drop affordances instead of try/catching.
+ */
+export function canMoveTo(doc: SurfaceDoc, id: string, containerId: string): MoveVerdict {
+  const reason = moveRefusalReason(doc, id, containerId);
+  return reason === null ? { ok: true } : { ok: false, reason };
+}
+
+/**
+ * Re-homes a component and its entire subtree (contract §5): splices `id` out
+ * of every `children` array that lists it, then splices it into
+ * `containerId`'s `children` at `index` — where `index` is interpreted
+ * **after the removal**, so a same-container reorder needs no caller-side
+ * adjustment (out-of-range indices clamp; non-finite indices land at the
+ * end). No id remapping, `dataModel` untouched. Throws exactly when canMoveTo
+ * refuses: `root`, unknown `id`/`containerId`, a non-children-array
+ * container, single-slot occupants, and `containerId` equal to `id` or
+ * inside `id`'s subtree. Pure: never mutates the input.
+ */
+export function moveComponent(
+  doc: SurfaceDoc,
+  id: string,
+  containerId: string,
+  index: number,
+): SurfaceDoc {
+  const reason = moveRefusalReason(doc, id, containerId);
+  if (reason !== null) {
+    throw new Error(reason);
+  }
+
+  // Removal first: the index is defined against the container's children
+  // AFTER the moved id disappears from wherever it currently sits.
+  const spliced = doc.components.map((c) => {
+    if (!Array.isArray(c.children) || !c.children.includes(id)) return c;
+    return { ...c, children: c.children.filter((childId) => childId !== id) } as DocComponent;
+  });
+
+  const container = spliced.find((c) => c.id === containerId);
+  const existingChildren = container?.children;
+  const children: unknown[] = Array.isArray(existingChildren) ? [...existingChildren] : [];
+  const at = Number.isFinite(index)
+    ? Math.max(0, Math.min(children.length, Math.trunc(index)))
+    : children.length;
+  children.splice(at, 0, id);
+
+  const components = spliced.map((c) =>
+    c.id === containerId ? ({ ...c, children } as DocComponent) : c,
+  );
   return { ...doc, components };
 }
 

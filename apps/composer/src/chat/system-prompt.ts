@@ -64,11 +64,17 @@ applies the JSON payload you return.
 - The surfaceId is always "${SURFACE_ID}". The catalogId is always "${CATALOG_ID}".
 - The data-model field is "value" (optionally with "path") — never "contents".
 - "components" is a FLAT list of {"id", "component", ...props}. Containment is by id
-  reference: container components (Row, Column, List, Card, Tabs, Modal) use
-  "children": ["id", ...]; Button uses "child": "id". The root component has
-  "id": "${ROOT_ID}". Every non-root component must be reachable from "${ROOT_ID}".
+  reference, and the renderer's schemas are STRICT about which prop carries it:
+  Row, Column and List use "children": ["id", ...]; Card and Button take exactly one
+  REQUIRED "child": "id"; Modal takes "trigger": "id" and "content": "id"; Tabs takes
+  "tabs": [{"title": "...", "child": "id"}, ...]. No other containment props exist.
+  The root component has "id": "${ROOT_ID}". Every non-root component must be
+  reachable from "${ROOT_ID}".
 - Data binding: a prop value of the form {"path": "/some/path"} reads the data model.
-- Actions: "action": {"event": {"name": "...", "context": [...]}}.
+- Actions: "action": {"event": {"name": "...", "context": {...}}} — "context" is an
+  OBJECT (string keys), never an array.
+- Unknown props are rejected and one bad component fails the whole update — emit only
+  props shown in the usage examples below.
 
 ## Available components
 

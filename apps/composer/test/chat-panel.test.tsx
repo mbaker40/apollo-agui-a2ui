@@ -70,7 +70,7 @@ describe('ChatPanel error paths', () => {
     sendMessage('hello');
     await waitFor(() => expect(screen.getByTestId('chip-stream-error')).toBeTruthy());
     expect(screen.getByTestId('chip-stream-error').textContent).toBe(
-      'Anthropic client not yet wired — set composerx.mockLlm=1 for the recorded client',
+      'No LLM configured — add an Anthropic API key in Settings (gear icon), or enable the recorded mock (composerx.mockLlm=1).',
     );
   });
 

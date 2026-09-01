@@ -351,9 +351,9 @@ describe('insertUsage', () => {
 });
 
 describe('listContainers / componentTree', () => {
-  it('lists only container-type component ids', () => {
+  it('lists only children-array container ids (Modal is a single-slot leaf)', () => {
     const doc = insertUsage(emptyDoc(), MODAL_USAGE);
-    expect(listContainers(doc)).toEqual(['root', 'root-g1', 'demo-modal-g1']);
+    expect(listContainers(doc)).toEqual(['root', 'root-g1']);
   });
 
   it('builds a nested tree following children, child, and string references', () => {

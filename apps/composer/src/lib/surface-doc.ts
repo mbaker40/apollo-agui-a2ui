@@ -10,15 +10,14 @@ export const SURFACE_ID = 'composer-canvas';
 export const CATALOG_ID = 'https://a2ui.org/specification/v0_9/basic_catalog.json';
 export const ROOT_ID = 'root';
 
-/** Component types whose `children` arrays accept spliced-in snippets (contract §3). */
-export const CONTAINER_COMPONENTS: ReadonlySet<string> = new Set([
-  'Row',
-  'Column',
-  'List',
-  'Card',
-  'Tabs',
-  'Modal',
-]);
+/**
+ * Component types whose `children` arrays accept spliced-in snippets — the
+ * only valid insert targets (contract §3). Per the renderer's zod schemas,
+ * Card/Button take a single required `child`, Modal takes `trigger`/`content`,
+ * and Tabs takes `tabs: [{title, child}]`; those slots are edited via
+ * JSON/chat, never by drop.
+ */
+export const CONTAINER_COMPONENTS: ReadonlySet<string> = new Set(['Row', 'Column', 'List']);
 
 /** A component instance in the flat list. Unknown fields are preserved verbatim. */
 export interface DocComponent {

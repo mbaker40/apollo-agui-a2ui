@@ -19,11 +19,8 @@ pnpm --filter @mwe/composer dev
 Open http://localhost:7464/. The canvas shows "Waiting for renderer…" until
 the catalog app answers the handshake, then renders a small welcome layout.
 
-**Keyless demo (mock LLM):** open Settings (gear) and tick "Use the recorded
-mock LLM", or set `localStorage['composerx.mockLlm'] = '1'` (or run with
-`VITE_MOCK_LLM=1`). The chat then streams a deterministic recorded reply whose
-JSON payload always validates and applies. Without the mock, chat reports that
-the Anthropic client is not wired yet (next milestone).
+**Chat needs either an Anthropic API key (Settings gear) or the recorded
+mock** — see [Chat: the Anthropic client](#chat-the-anthropic-client) below.
 
 ```sh
 pnpm --filter @mwe/composer test | typecheck | build
@@ -47,6 +44,7 @@ pnpm --filter @mwe/composer test | typecheck | build
   disclosure per assistant message, stop button. When a reply finishes, the
   LAST fenced ```json block is parsed as a full `RenderA2uiItem[]` and applied
   (undo-able); the message gets an "applied" chip, or an inline error chip.
+  Backed by the real Anthropic client below (or the recorded mock).
 - **Bottom drawer** — tabs:
   - **Layout JSON**: the full `RenderA2uiItem[]` as editable text
     (Apply / Format / Reset, inline parse errors, "modified" badge while your
@@ -73,6 +71,50 @@ container, i.e. zero sidecar messages required. If the renderer never sends
 `RENDERER_READY`, the canvas shows an error state after 10s with the URL and
 a retry/settings shortcut.
 
+## Chat: the Anthropic client
+
+The chat panel is backed by `AnthropicChatClient`
+(`src/chat/anthropic-client.ts`, implementing the `LlmClient` seam of
+contract §8) using the official `@anthropic-ai/sdk`.
+
+**Adding a key.** Open Settings (gear icon) and paste an Anthropic API key.
+It is stored in `localStorage` under `composerx.apiKey` — browser-only, never
+bundled, never sent anywhere except `api.anthropic.com`. Key and model are
+re-read from Settings on every send, so changes take effect on the next
+message without a reload. Clear the field to remove the key.
+
+**Model picker.** `claude-opus-5` (Opus 5, default), `claude-sonnet-5`
+(Sonnet 5), `claude-haiku-4-5-20251001` (Haiku 4.5).
+
+**Direct-from-browser architecture.** There is no proxy server: requests go
+straight from your browser to `api.anthropic.com` using the SDK's
+`dangerouslyAllowBrowser: true`, which lifts the SDK's browser guard and
+sends the `anthropic-dangerous-direct-browser-access` CORS opt-in header.
+That flag exists because a key embedded in shipped frontend code would be
+public; here it is safe-by-construction: each visitor supplies their own key
+at runtime, and no key ever ships in the bundle. Treat the key like a
+password on shared machines — anyone with access to the browser profile can
+read `localStorage`.
+
+**Prompt caching.** The system prompt (payload rules + catalog + usage
+examples + current layout, built by `src/chat/system-prompt.ts` from the live
+handshake) is sent as a single system block with
+`cache_control: {type: 'ephemeral'}`, so that large, stable prefix is cached
+across turns and follow-up messages only pay for the delta.
+
+**Thinking display.** Extended thinking is enabled — adaptive with
+summarized display (`thinking: {type: 'adaptive', display: 'summarized'}`)
+on Opus/Sonnet; the dated Haiku 4.5 model predates adaptive thinking and
+uses the enabled form with a 4096-token budget. Thinking deltas stream into
+the collapsible "Thinking" disclosure above each assistant reply.
+
+**Keyless demo (recorded mock).** Tick "Use the recorded mock LLM" in
+Settings, or set `localStorage['composerx.mockLlm'] = '1'`, or run with
+`VITE_MOCK_LLM=1`. The chat then streams a deterministic recorded reply
+(thinking + prose + a JSON payload that always validates and applies) — ideal
+for demos and e2e. The mock takes precedence over a configured key; with
+neither, the chat explains how to configure one of them.
+
 ## Settings & storage keys
 
 | Key                     | Meaning                                  | Default                                                                                           |
@@ -88,11 +130,6 @@ React mounts (no flash); the toggle also sends `SET_THEME` to the renderer.
 
 ## Next milestones (not in this app yet)
 
-- **Anthropic client (agent C)** — `AnthropicChatClient` implementing
-  `src/chat/llm-client.ts` (`@anthropic-ai/sdk`, streaming, adaptive thinking,
-  prompt caching), selected when a key is configured. The system prompt
-  builder it needs is already here (`src/chat/system-prompt.ts`), fed from the
-  live catalog/usages handshake + current layout.
 - **Deploy** — GitHub Pages workflow builds composer at the artifact root
   (`COMPOSER_BASE=/apollo-agui-a2ui/`) with the catalog under `catalog/`
   (contract §9); wave-3 Playwright e2e covers real cross-frame messaging.

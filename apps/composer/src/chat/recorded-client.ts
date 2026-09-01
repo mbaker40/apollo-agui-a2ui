@@ -23,7 +23,7 @@ export function recordedRenderItems(): RenderA2uiItem[] {
           id: 'card-title',
           component: 'Text',
           text: 'Hello from the recorded model',
-          usageHint: 'h3',
+          variant: 'h3',
         },
         {
           id: 'card-text',

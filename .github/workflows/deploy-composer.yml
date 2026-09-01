@@ -3,9 +3,11 @@
 # pinned in docs/composer/CONTRACT.md §9 (the composer's production default
 # renderer URL is `new URL('catalog/', document.baseURI)`).
 #
-# One-time setup by the repo owner: Settings → Pages → Build and deployment →
-# Source: "GitHub Actions". No secrets — visitors bring their own Anthropic
-# key in-browser.
+# configure-pages runs with `enablement: true`, so the first run on main
+# enables Pages automatically (no Settings step). If enablement is rejected
+# (e.g. a private repo on a plan without Pages), either make the repo public
+# or enable it manually: Settings → Pages → Source: "GitHub Actions".
+# No secrets — visitors bring their own Anthropic key in-browser.
 name: Deploy composer to GitHub Pages
 
 on:
@@ -58,6 +60,8 @@ jobs:
           # file (contract §2/§9) — fail the build if it went missing.
           test -f site/catalog/catalog
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
